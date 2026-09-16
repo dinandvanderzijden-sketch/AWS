@@ -1,0 +1,18 @@
+# Kopieer naar terraform.tfvars en vul aan. terraform.tfvars nooit committen
+# als het geheimen bevat — gebruik voor de pipeline liever TF_VAR_* env vars
+# of GitHub Environment secrets (zie .github/workflows/terraform.yml).
+
+aws_region   = "eu-west-1"
+project_name = "innovatech-webplatform"
+environment  = "production"
+
+admin_cidr = "203.0.113.10/32" # jouw VPN/kantoor-IP — nooit 0.0.0.0/0 in productie
+
+container_image = "<jouw-ecr-repo-uri>:latest"
+
+github_org  = "jouw-github-org"
+github_repo = "jouw-repo-naam"
+# github_runner_token: NIET hier zetten. Wordt als -var of TF_VAR_github_runner_token
+# door de workflow aangeleverd, opgehaald via de GitHub API (kortlevend token).
+
+key_pair_name = null # of een bestaande EC2 key pair voor noodgevallen-SSH
