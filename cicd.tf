@@ -1,19 +1,11 @@
 # =============================================================================
-# CI/CD MODULE — Self-hosted GitHub Actions runner op EC2 in de Hub
-# management subnet. REQ-NCA-P1-07/08.
+# cicd.tf — self-hosted GitHub Actions runner op EC2.
 #
-# De runner heeft GEEN AWS access keys nodig: rechten lopen via een IAM
-# Instance Profile (EC2 IAM Role), zoals in het analysedocument beschreven.
+# Staat in een publieke subnet (net als de andere management-VM), maar is
+# alleen bereikbaar op SSH vanaf admin_cidr (zie security.tf) — hij heeft
+# zelf alleen uitgaand internet nodig om zich bij GitHub te melden, er hoeft
+# nooit een poort open voor inkomend verkeer vanaf internet.
 # =============================================================================
-
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-}
 
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
@@ -30,10 +22,9 @@ resource "aws_iam_role" "runner" {
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
-# LET OP: dit project geeft de runner brede rechten omdat de pipeline zelf
-# de volledige infrastructuur (VPCs, ECS, RDS, IAM-rollen, ...) beheert.
-# Vervang dit in een echte productieomgeving door een strak afgebakende
-# policy per resourcetype, of splits de runner op in losse rollen per stage.
+# LET OP: breed van opzet omdat de pipeline zélf de volledige infrastructuur
+# beheert. Bouw dit in een vervolgstap af naar een strakker afgebakende
+# policy per resourcetype als dit richting een echte productieomgeving gaat.
 resource "aws_iam_role_policy_attachment" "runner_admin" {
   role       = aws_iam_role.runner.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
@@ -45,15 +36,14 @@ resource "aws_iam_instance_profile" "runner" {
 }
 
 resource "aws_instance" "runner" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.runner_instance_type
-  subnet_id              = var.hub_mgmt_subnet_id
-  vpc_security_group_ids = [var.management_sg_id]
-  iam_instance_profile   = aws_iam_instance_profile.runner.name
-  key_name               = var.key_pair_name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.runner_instance_type
+  subnet_id                   = aws_subnet.public[0].id
+  vpc_security_group_ids      = [aws_security_group.management.id]
+  iam_instance_profile        = aws_iam_instance_profile.runner.name
+  key_name                    = var.key_pair_name
+  associate_public_ip_address = true
 
-  # Registratietoken komt uit een sensitive variable (zie variables.tf) —
-  # nooit hardcoded, en met korte levensduur (GitHub genereert 'm on-demand).
   user_data = templatefile("${path.module}/templates/runner-userdata.sh.tpl", {
     github_org    = var.github_org
     github_repo   = var.github_repo

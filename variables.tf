@@ -1,78 +1,59 @@
+# =============================================================================
+# variables.tf — alle instelbare waarden op één plek.
+# =============================================================================
+
 variable "aws_region" {
-  description = "AWS regio waarin alles wordt uitgerold."
-  type        = string
-  default     = "eu-west-1"
+  type    = string
+  default = "eu-west-1"
 }
 
 variable "project_name" {
-  description = "Korte projectnaam, gebruikt als prefix voor resource-namen en tags."
-  type        = string
-  default     = "innovatech-webplatform"
+  type    = string
+  default = "innovatech-webplatform"
 }
 
 variable "environment" {
-  description = "Omgeving (production, staging, ...)."
-  type        = string
-  default     = "production"
+  type    = string
+  default = "production"
 }
 
-# --- Netwerk: Hub-and-Spoke (REQ-NCA-P1-01) ---------------------------------
+# --- Netwerk (één VPC, 3 lagen: publiek / privé-web / privé-data) ----------
 
-variable "hub_vpc_cidr" {
-  description = "CIDR van de centrale Hub VPC."
-  type        = string
-  default     = "10.0.0.0/16"
+variable "vpc_cidr" {
+  type    = string
+  default = "10.0.0.0/16"
 }
 
-variable "hub_public_subnet_cidrs" {
-  description = "Publieke subnets in de Hub (ALB + IGW), 1 per AZ."
+variable "public_subnet_cidrs" {
+  description = "ALB + NAT Gateway, 1 per AZ."
   type        = list(string)
-  default     = ["10.0.2.0/24", "10.0.3.0/24"]
+  default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
 
-variable "hub_mgmt_subnet_cidr" {
-  description = "Management subnet in de Hub (CI/CD runner, Prometheus/Grafana, Bastion)."
-  type        = string
-  default     = "10.0.1.0/24"
-}
-
-variable "spoke_web_vpc_cidr" {
-  description = "CIDR van de Spoke-VPC voor de webservice (NGINX/ECS)."
-  type        = string
-  default     = "10.1.0.0/16"
-}
-
-variable "spoke_web_subnet_cidrs" {
-  description = "Private web subnets, verspreid over 2 AZ's (REQ-NCA-P1-04)."
+variable "private_web_subnet_cidrs" {
+  description = "ECS Fargate taken (NGINX), 1 per AZ."
   type        = list(string)
-  default     = ["10.1.1.0/24", "10.1.2.0/24"]
+  default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
-variable "spoke_data_vpc_cidr" {
-  description = "CIDR van de Spoke-VPC voor de database."
-  type        = string
-  default     = "10.3.0.0/16"
-}
-
-variable "spoke_data_subnet_cidrs" {
-  description = "Private data subnets voor RDS Multi-AZ."
+variable "private_db_subnet_cidrs" {
+  description = "RDS MariaDB, 1 per AZ."
   type        = list(string)
-  default     = ["10.3.1.0/24", "10.3.2.0/24"]
+  default     = ["10.0.21.0/24", "10.0.22.0/24"]
 }
 
 variable "admin_cidr" {
-  description = "CIDR (bijv. jouw VPN/kantoor-IP) dat SSH naar de management subnet mag maken."
+  description = "Jouw IP/VPN-CIDR voor SSH naar de runner/observability-VM's en toegang tot Grafana."
   type        = string
-  # LET OP: pas dit aan voor gebruik — 0.0.0.0/0 mag hier nooit blijven staan.
+  # LET OP: pas dit aan — 0.0.0.0/0 mag hier nooit blijven staan.
   default = "0.0.0.0/0"
 }
 
-# --- Webservice / ECS Fargate (REQ-NCA-P1-03/04) ----------------------------
+# --- Webservice (ECS Fargate) -----------------------------------------------
 
 variable "container_image" {
-  description = "NGINX image (bijv. jouw ECR repo:tag) dat op ECS Fargate draait."
-  type        = string
-  default     = "nginx:1.27-alpine"
+  type    = string
+  default = "nginx:1.27-alpine"
 }
 
 variable "ecs_task_cpu" {
@@ -86,7 +67,7 @@ variable "ecs_task_memory" {
 }
 
 variable "ecs_min_tasks" {
-  description = "Minimaal aantal NGINX-taken (REQ-NCA-P1-04: minimaal 2)."
+  description = "Minimaal 2, verspreid over 2 AZ's (REQ-NCA-P1-04)."
   type        = number
   default     = 2
 }
@@ -96,7 +77,13 @@ variable "ecs_max_tasks" {
   default = 6
 }
 
-# --- Database (REQ-NCA-P1-02) -----------------------------------------------
+variable "ecs_cpu_target" {
+  description = "Streefwaarde (%) voor autoscaling; ECS voegt/verwijdert taken om hierbij te blijven."
+  type        = number
+  default     = 70
+}
+
+# --- Database ----------------------------------------------------------------
 
 variable "db_engine_version" {
   type    = string
@@ -104,8 +91,21 @@ variable "db_engine_version" {
 }
 
 variable "db_instance_class" {
-  type    = string
-  default = "db.t4g.medium"
+  description = "Fontys-sandbox SCP's staan vaak alleen free-tier-instances toe."
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_multi_az" {
+  description = "Multi-AZ kan door kostenbeperkende SCP's geblokkeerd worden."
+  type        = bool
+  default     = false
+}
+
+variable "db_deletion_protection" {
+  description = "Zet aan voor echte productie; uit houdt het makkelijker om tijdens het leren opnieuw op te bouwen."
+  type        = bool
+  default     = false
 }
 
 variable "db_name" {
@@ -118,20 +118,18 @@ variable "db_username" {
   default = "dbadmin"
 }
 
-# --- CI/CD (REQ-NCA-P1-07/08) -----------------------------------------------
+# --- CI/CD ---------------------------------------------------------------------
 
 variable "github_org" {
-  description = "GitHub org/gebruikersnaam die de self-hosted runner registreert."
-  type        = string
+  type = string
 }
 
 variable "github_repo" {
-  description = "GitHub repository naam."
-  type        = string
+  type = string
 }
 
 variable "github_runner_token" {
-  description = "Kortlevend registratietoken voor de self-hosted runner (via GitHub API/Secrets Manager aangeleverd, nooit hardcoded in git)."
+  description = "Kortlevend registratietoken, via GitHub opgehaald — nooit hardcoded."
   type        = string
   sensitive   = true
 }
@@ -142,7 +140,7 @@ variable "runner_instance_type" {
 }
 
 variable "key_pair_name" {
-  description = "Bestaande EC2 key pair voor noodgevallen-SSH naar runner/observability instances."
+  description = "Bestaande EC2 key pair voor noodgevallen-SSH. Laat null als je die niet hebt."
   type        = string
   default     = null
 }

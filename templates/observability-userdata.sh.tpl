@@ -8,13 +8,12 @@ curl -SL https://github.com/docker/compose/releases/latest/download/docker-compo
 chmod +x /usr/local/bin/docker-compose
 
 mkdir -p /opt/observability
-cat > /opt/observability/prometheus.yml <<EOF
+cat > /opt/observability/prometheus.yml <<'EOF'
 global:
   scrape_interval: 15s
 
 scrape_configs:
   - job_name: "ecs-nginx"
-    ec2_sd_configs: []
     static_configs:
       - targets: ["nginx-exporter.internal:9113"]
 
@@ -22,12 +21,12 @@ scrape_configs:
     static_configs:
       - targets: ["mysqld-exporter.internal:9187"]
 
-  # Vervang bovenstaande static targets door de AWS EC2/ECS service discovery
-  # (ec2_sd_config / ecs_sd_config) zodra taken/instances dynamisch schalen,
-  # zodat nieuwe Fargate-taken automatisch worden meegenomen.
+  # Vervang bovenstaande static targets door AWS EC2/ECS service discovery
+  # zodra taken dynamisch schalen, zodat nieuwe Fargate-taken automatisch
+  # worden meegenomen.
 EOF
 
-cat > /opt/observability/docker-compose.yml <<EOF
+cat > /opt/observability/docker-compose.yml <<'EOF'
 version: "3.8"
 services:
   prometheus:
@@ -45,8 +44,7 @@ services:
     depends_on:
       - prometheus
     environment:
-      # Wijzig dit direct na de eerste login; overweeg dit op termijn uit
-      # AWS Secrets Manager te halen in plaats van hier hardcoded te zetten.
+      # Wijzig dit direct na de eerste login.
       - GF_SECURITY_ADMIN_PASSWORD=changeme-rotate-me
     volumes:
       - grafana-data:/var/lib/grafana

@@ -1,126 +1,99 @@
-# Infrastructure as Code — Innovatech Webplatform (AWS)
+# Infrastructure as Code — Innovatech Webplatform (vereenvoudigde versie)
 
-Terraform-implementatie van het Analysedocument en Ontwerpdocument:
-Hub-and-Spoke netwerk, NGINX op ECS Fargate met Blue-Green deployment,
-Amazon RDS MariaDB, Prometheus/Grafana en een self-hosted GitHub Actions
-runner — allemaal declaratief, met remote state en CI/CD (REQ-NCA-P1-06
-t/m P1-08).
+Dit is een herschreven, platte versie van het Terraform-project: geen
+modules, geen hub-and-spoke met Transit Gateway, geen Blue-Green CodeDeploy
+— maar wél alle kernvereisten uit het analyse-/ontwerpdocument. Bedoeld om
+makkelijk zelf bij te kunnen houden en uit te breiden.
 
-## Structuur
+## Bestanden
 
-```
-aws-iac/
-├── backend.tf                      # documentatie remote state (S3 + DynamoDB)
-├── providers.tf                    # AWS provider + versies
-├── variables.tf / outputs.tf       # root laag
-├── main.tf                         # koppelt alle modules
-├── terraform.tfvars.example        # kopieer naar terraform.tfvars
-├── modules/
-│   ├── network/                    # Hub VPC + 2 Spoke VPC's + Transit Gateway
-│   ├── security/                   # Security Groups (firewall-matrix)
-│   ├── database/                   # RDS MariaDB, KMS, Secrets Manager
-│   ├── compute/                    # ALB, ECS Fargate, CodeDeploy Blue-Green, autoscaling
-│   ├── cicd/                       # Self-hosted GitHub Actions runner (EC2 + IAM)
-│   └── observability/              # Prometheus + Grafana (EC2, docker-compose)
-├── environments/
-│   └── bootstrap/                  # eenmalig: maakt de S3/DynamoDB backend zelf aan
-└── .github/workflows/terraform.yml # de CI/CD-pipeline
-```
+Terraform leest gewoon élk `.tf`-bestand in deze map als één geheel samen —
+de opsplitsing hieronder is puur voor de leesbaarheid, er zit geen
+technische scheiding (zoals bij modules) tussen.
+
+| Bestand | Inhoud |
+|---|---|
+| `main.tf` | provider, terraform-blok, gedeelde data sources (AZ's, AMI) |
+| `variables.tf` | alle instelbare waarden, op één plek |
+| `network.tf` | 1 VPC, 3 lagen subnets (publiek / privé-web / privé-data) |
+| `security.tf` | security groups (ALB → web → database, management apart) |
+| `database.tf` | RDS MariaDB + Secrets Manager |
+| `compute.tf` | ALB + ECS Fargate (NGINX) + autoscaling |
+| `cicd.tf` | self-hosted GitHub Actions runner (EC2) |
+| `observability.tf` | Prometheus + Grafana (EC2, docker-compose) |
+| `outputs.tf` | wat je na een apply terugkrijgt (ALB-adres, etc.) |
+| `environments/bootstrap/` | eenmalig: maakt de S3/DynamoDB remote-state backend aan |
+| `.github/workflows/terraform.yml` | de CI/CD-pipeline |
+
+## Wat is er simpeler gemaakt t.o.v. de vorige versie?
+
+| Was | Is nu | Waarom |
+|---|---|---|
+| Hub-VPC + 2 Spoke-VPC's + Transit Gateway | 1 VPC met 3 subnet-lagen | Evenveel segmentatie voor dit doel, geen TGW-routing om over na te denken |
+| Modules (`modules/network`, `modules/compute`, ...) | Platte `.tf`-bestanden in de root | Geen variabelen die je 3x moet doorgeven voor je bij de daadwerkelijke resource bent |
+| Network Load Balancer (voor cross-VPC targets) | Gewone Application Load Balancer | ALB en ECS-taken zitten nu toch al in dezelfde VPC |
+| CodeDeploy Blue/Green deployment | Standaard ECS rolling-update | Nog steeds zero-downtime, maar zonder CodeDeploy-app, deployment group en aparte IAM-rol erbij |
+| Step-scaling + 2 losse CloudWatch-alarms | 1 target-tracking autoscaling-policy (CPU 70%) | Functioneel gelijk, 1 resource in plaats van 4 |
+| Custom KMS-key + custom DB parameter group | Standaard AWS-beheerde encryptie | Nog steeds versleuteld, gewoon minder resources om te begrijpen |
 
 ## Requirement-traceability
 
-| Requirement | Waar geïmplementeerd |
+| Requirement | Waar |
 |---|---|
-| REQ-NCA-P1-01 Netwerksegmentatie | `modules/network` (Hub + 2 Spokes via Transit Gateway, Deny-All + expliciete routes) |
-| REQ-NCA-P1-02 Secure Resource Access | `modules/security` (DB-SG alleen vanaf web-CIDR), `modules/database` (`publicly_accessible = false`) |
-| REQ-NCA-P1-03 Webservice Deployment | `modules/compute` (ECS Fargate taakdefinitie, omgevingsvariabelen via Secrets Manager) |
-| REQ-NCA-P1-04 Scalability | `modules/compute` (`ecs_min_tasks`, step-scaling alarms op 70%/20% CPU) |
-| REQ-NCA-P1-05 Observability | `modules/observability` (Prometheus/Grafana) + CloudWatch alarms in `modules/compute` |
-| REQ-NCA-P1-06 IaC | dit hele project + `backend.tf` (S3 + DynamoDB locking) |
-| REQ-NCA-P1-07 CI/CD | `.github/workflows/terraform.yml` (plan op PR, apply na merge + approval) |
-| REQ-NCA-P1-08 DevOps Platform | GitHub repo = single source of truth; elke apply is gekoppeld aan een commit/PR |
+| REQ-NCA-P1-01 Netwerksegmentatie | `network.tf` (publiek / privé-web / privé-data, elk hun eigen route table) |
+| REQ-NCA-P1-02 Secure Resource Access | `security.tf` (DB-SG alleen vanaf web-SG) + `database.tf` (`publicly_accessible = false`) |
+| REQ-NCA-P1-03 Webservice Deployment | `compute.tf` (ECS Fargate taakdefinitie) |
+| REQ-NCA-P1-04 Scalability | `compute.tf` (`ecs_min_tasks`, target-tracking autoscaling) |
+| REQ-NCA-P1-05 Observability | `observability.tf` (Prometheus/Grafana) |
+| REQ-NCA-P1-06 IaC | dit hele project + `main.tf` (S3-backend) |
+| REQ-NCA-P1-07 CI/CD | `.github/workflows/terraform.yml` |
+| REQ-NCA-P1-08 DevOps Platform | GitHub repo = single source of truth |
 
-## 1. Eenmalige bootstrap (lokaal, met jouw eigen AWS-credentials)
+## Hoe te draaien
 
-Terraform kan zijn eigen backend niet aanmaken, dus dit stapje gebeurt
-buiten de pipeline om, en de zelfgehoste runner bestaat op dit moment nog
-niet — dit draai je dus lokaal.
+Zelfde volgorde als eerder:
 
 ```bash
+# 1. Eenmalig: de remote-state backend aanmaken
 cd environments/bootstrap
 terraform init
-terraform apply       # maakt de S3-bucket + DynamoDB-tabel voor de state
-```
+terraform apply
 
-## 2. Eerste infrastructuur-uitrol (lokaal)
-
-De self-hosted runner moet zelf ook door Terraform worden aangemaakt —
-de allereerste `apply` draai je dus ook lokaal, met je eigen (tijdelijke,
-liefst SSO/AssumeRole-) AWS-credentials:
-
-```bash
-cd ../..   # terug naar de root van dit project
+# 2. Eerste, lokale apply (bouwt o.a. de GitHub-runner)
+cd ../..
 cp terraform.tfvars.example terraform.tfvars   # en vul 'm aan
 
 terraform init \
-  -backend-config="bucket=<naam-uit-stap-1>" \
+  -backend-config="bucket=<state_bucket uit stap 1>" \
   -backend-config="key=production/terraform.tfstate" \
   -backend-config="region=eu-west-1" \
-  -backend-config="dynamodb_table=<naam-uit-stap-1>"
+  -backend-config="dynamodb_table=<lock_table uit stap 1>"
 
-terraform plan   -var="github_runner_token=<kortlevend-token>"
-terraform apply  -var="github_runner_token=<kortlevend-token>"
+terraform apply -var="github_runner_token=<token via GitHub Settings → Actions → Runners → New self-hosted runner>"
 ```
 
-Het `github_runner_token` haal je op via:
-`gh api -X POST repos/<org>/<repo>/actions/runners/registration-token`
-(of via de GitHub UI: Settings → Actions → Runners → New self-hosted
-runner). Dit token is kortlevend en hoeft dus nooit in git te staan.
+Daarna in GitHub: repository variables `TF_STATE_BUCKET`, `TF_STATE_KEY`,
+`TF_LOCK_TABLE`, secret `GH_RUNNER_REG_TOKEN`, en een `production`
+environment met een verplichte reviewer. Vanaf dan loopt alles via een
+PR → plan → merge → approve → apply.
 
-Na deze apply staat de self-hosted runner in het Hub management subnet
-en meldt hij zich bij GitHub Actions. Vanaf nu lopen alle volgende
-wijzigingen via de pipeline.
+## Kanttekeningen
 
-## 3. Doorlopend gebruik: via GitHub Actions
+- **Eén NAT Gateway, single-AZ**: bewust, i.v.m. kosten. Voor echte
+  productie: één per AZ.
+- **RDS-instance klein gehouden** (`db.t3.micro`, `multi_az = false`) omdat
+  Fontys-sandbox SCP's grotere/Multi-AZ instances vaak blokkeren. Zet dit
+  gerust groter als je eigen account dat toelaat.
+- **Runner-IAM-rol heeft `AdministratorAccess`** omdat de pipeline de hele
+  infra beheert — bouw dit af als dit richting een echte productieomgeving
+  gaat.
+- **Geen TLS/HTTPS** op de ALB-listener — voeg een ACM-certificaat toe
+  zodra er een domeinnaam is.
+- Draai na wijzigingen altijd `terraform fmt` en `terraform validate`
+  voordat je een PR opent.
 
-In je repository-instellingen zet je:
-
-- **Repository variables**: `TF_STATE_BUCKET`, `TF_STATE_KEY`, `TF_LOCK_TABLE`
-- **Repository secret**: `GH_RUNNER_REG_TOKEN` (voor het geval de pipeline
-  de runner ooit opnieuw moet registreren)
-- **Environment `production`** met minimaal 1 verplichte reviewer — dít is
-  het "plan/preview vóór apply"-moment uit REQ-NCA-P1-07.
-
-Workflow:
-
-1. Je opent een PR met infrastructuurwijzigingen → de pipeline draait
-   `terraform plan` op de self-hosted runner en plaatst de output als
-   PR-comment.
-2. Na merge naar `main` draait `terraform apply` — maar pas na
-   goedkeuring van de reviewer op de `production` environment.
-
-## Belangrijke kanttekeningen / bewuste vereenvoudigingen
-
-- **Cross-VPC ALB-targets**: de ALB staat in de Hub, de ECS-taken in de
-  Spoke-Web VPC. Dit werkt via ALB's ondersteuning voor IP-targets in een
-  andere VPC (bereikbaar via de Transit Gateway). Controleer of dit in
-  jouw regio/account beschikbaar is; als alternatief kun je de ALB in de
-  Spoke-Web VPC plaatsen met een aparte publieke subnet daar.
-- **Eén NAT Gateway**: voor deze opdracht bewust op 1 AZ gehouden i.v.m.
-  kosten. Voor echte productie: één NAT Gateway per AZ.
-- **CI/CD-runner rechten**: de runner-IAM-rol heeft nu `AdministratorAccess`
-  omdat de pipeline zelf de volledige infrastructuur beheert. Bouw dit in
-  een vervolgstap af naar een strak afgebakende policy.
-- **TLS/HTTPS**: de ALB-listener luistert nu op poort 80. Voeg een
-  ACM-certificaat + HTTPS-listener toe zodra er een domeinnaam is.
-- Draai na het schrijven van `.tf`-bestanden altijd `terraform fmt -recursive`
-  en `terraform validate` voordat je een PR opent.
-
-## Op- en afbreken
+## Opruimen
 
 ```bash
 terraform destroy -var="github_runner_token=<token>"
 ```
-
-`deletion_protection = true` staat aan voor de RDS-instance — zet dit
-bewust uit voordat je destroy draait, anders faalt die stap.

@@ -1,11 +1,6 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Installeert en registreert een GitHub Actions self-hosted runner.
-# Draait binnen het Hub management subnet — heeft dus alleen uitgaand
-# internet nodig (via de NAT Gateway) om github.com te bereiken; er hoeft
-# nooit een poort open te staan voor inkomend verkeer vanaf internet.
-
 dnf install -y docker git jq tar gzip
 systemctl enable --now docker
 usermod -aG docker ec2-user
