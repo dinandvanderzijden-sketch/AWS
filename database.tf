@@ -1,7 +1,3 @@
-# =============================================================================
-# database.tf — RDS MariaDB, privé, versleuteld, met credentials in
-# Secrets Manager (nooit in platte tekst in de state of in git).
-# =============================================================================
 
 resource "aws_db_subnet_group" "this" {
   name       = "${var.project_name}-db-subnets"
