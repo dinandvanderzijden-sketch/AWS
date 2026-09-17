@@ -1,9 +1,10 @@
-# Infrastructure as Code — Innovatech Webplatform (vereenvoudigde versie)
+# Infrastructure as Code — Innovatech Webplatform
 
-Dit is een herschreven, platte versie van het Terraform-project: geen
-modules, geen hub-and-spoke met Transit Gateway, geen Blue-Green CodeDeploy
-— maar wél alle kernvereisten uit het analyse-/ontwerpdocument. Bedoeld om
-makkelijk zelf bij te kunnen houden en uit te breiden.
+Dit Terraform-project maakt een hub-and-spoke-netwerk met één hub en drie
+spokes. De hub bevat de publieke Application Load Balancer. Twee spokes
+bevatten elk een private NGINX-EC2-instance; de derde spoke bevat de private
+RDS MariaDB-database. Een Transit Gateway verzorgt de routing tussen de
+VPC's.
 
 ## Bestanden
 
@@ -15,10 +16,10 @@ technische scheiding (zoals bij modules) tussen.
 |---|---|
 | `main.tf` | provider, terraform-blok, gedeelde data sources (AZ's, AMI) |
 | `variables.tf` | alle instelbare waarden, op één plek |
-| `network.tf` | 1 VPC, 3 lagen subnets (publiek / privé-web / privé-data) |
-| `security.tf` | security groups (ALB → web → database, management apart) |
+| `network.tf` | hub, 2 web-spoke-VPC's, database-spoke-VPC en Transit Gateway |
+| `security.tf` | security groups met routed CIDR-regels tussen de VPC's |
 | `database.tf` | RDS MariaDB + Secrets Manager |
-| `compute.tf` | ALB + ECS Fargate (NGINX) + autoscaling |
+| `compute.tf` | publieke ALB + 2 private NGINX-EC2-instances |
 | `cicd.tf` | self-hosted GitHub Actions runner (EC2) |
 | `observability.tf` | Prometheus + Grafana (EC2, docker-compose) |
 | `outputs.tf` | wat je na een apply terugkrijgt (ALB-adres, etc.) |
@@ -29,21 +30,20 @@ technische scheiding (zoals bij modules) tussen.
 
 | Was | Is nu | Waarom |
 |---|---|---|
-| Hub-VPC + 2 Spoke-VPC's + Transit Gateway | 1 VPC met 3 subnet-lagen | Evenveel segmentatie voor dit doel, geen TGW-routing om over na te denken |
+| Hub-VPC + 2 web-spokes + 1 database-spoke | Hub + 3 spokes + Transit Gateway | VPC-segmentatie en centrale routing |
 | Modules (`modules/network`, `modules/compute`, ...) | Platte `.tf`-bestanden in de root | Geen variabelen die je 3x moet doorgeven voor je bij de daadwerkelijke resource bent |
-| Network Load Balancer (voor cross-VPC targets) | Gewone Application Load Balancer | ALB en ECS-taken zitten nu toch al in dezelfde VPC |
-| CodeDeploy Blue/Green deployment | Standaard ECS rolling-update | Nog steeds zero-downtime, maar zonder CodeDeploy-app, deployment group en aparte IAM-rol erbij |
-| Step-scaling + 2 losse CloudWatch-alarms | 1 target-tracking autoscaling-policy (CPU 70%) | Functioneel gelijk, 1 resource in plaats van 4 |
+| Cross-VPC ECS-targets | EC2 NGINX-targets in de web-spokes | Rechtstreeks als IP-targets aan de hub-ALB te koppelen |
+| Eén NAT Gateway voor alles | Eén NAT Gateway per web-spoke | Private NGINX-hosts kunnen updates ophalen zonder publiek IP |
 | Custom KMS-key + custom DB parameter group | Standaard AWS-beheerde encryptie | Nog steeds versleuteld, gewoon minder resources om te begrijpen |
 
 ## Requirement-traceability
 
 | Requirement | Waar |
 |---|---|
-| REQ-NCA-P1-01 Netwerksegmentatie | `network.tf` (publiek / privé-web / privé-data, elk hun eigen route table) |
+| REQ-NCA-P1-01 Netwerksegmentatie | `network.tf` (hub + 3 spokes, TGW en route tables) |
 | REQ-NCA-P1-02 Secure Resource Access | `security.tf` (DB-SG alleen vanaf web-SG) + `database.tf` (`publicly_accessible = false`) |
-| REQ-NCA-P1-03 Webservice Deployment | `compute.tf` (ECS Fargate taakdefinitie) |
-| REQ-NCA-P1-04 Scalability | `compute.tf` (`ecs_min_tasks`, target-tracking autoscaling) |
+| REQ-NCA-P1-03 Webservice Deployment | `compute.tf` (2 NGINX-EC2-instances achter de ALB) |
+| REQ-NCA-P1-04 Availability | 2 web-spokes, elk met een NGINX-instance en ALB-health checks |
 | REQ-NCA-P1-05 Observability | `observability.tf` (Prometheus/Grafana) |
 | REQ-NCA-P1-06 IaC | dit hele project + `main.tf` (S3-backend) |
 | REQ-NCA-P1-07 CI/CD | `.github/workflows/terraform.yml` |
@@ -79,8 +79,8 @@ PR → plan → merge → approve → apply.
 
 ## Kanttekeningen
 
-- **Eén NAT Gateway, single-AZ**: bewust, i.v.m. kosten. Voor echte
-  productie: één per AZ.
+- **NAT Gateway-kosten**: er draait één NAT Gateway per web-spoke, zodat
+  private NGINX-hosts software kunnen installeren zonder publieke IP's.
 - **RDS-instance klein gehouden** (`db.t3.micro`, `multi_az = false`) omdat
   Fontys-sandbox SCP's grotere/Multi-AZ instances vaak blokkeren. Zet dit
   gerust groter als je eigen account dat toelaat.
@@ -89,6 +89,10 @@ PR → plan → merge → approve → apply.
   gaat.
 - **Geen TLS/HTTPS** op de ALB-listener — voeg een ACM-certificaat toe
   zodra er een domeinnaam is.
+- De ALB gebruikt IP-targets over de Transit Gateway. Controleer in de eigen
+  AWS-regio/provider-versie dat cross-VPC IP-targets via TGW voor het gekozen
+  load-balancer-type zijn toegestaan; anders is een interne NLB in de hub de
+  passende variant.
 - Draai na wijzigingen altijd `terraform fmt` en `terraform validate`
   voordat je een PR opent.
 

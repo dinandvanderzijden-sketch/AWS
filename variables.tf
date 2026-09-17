@@ -19,27 +19,50 @@ variable "environment" {
 
 # --- Netwerk (één VPC, 3 lagen: publiek / privé-web / privé-data) ----------
 
-variable "vpc_cidr" {
+variable "hub_vpc_cidr" {
   type    = string
   default = "10.0.0.0/16"
 }
 
-variable "public_subnet_cidrs" {
-  description = "ALB + NAT Gateway, 1 per AZ."
+variable "web_vpc_cidrs" {
+  description = "CIDRs for the two web spoke VPCs."
+  type        = list(string)
+  default     = ["10.1.0.0/16", "10.2.0.0/16"]
+}
+
+variable "database_vpc_cidr" {
+  type    = string
+  default = "10.3.0.0/16"
+}
+
+variable "hub_public_subnet_cidrs" {
+  description = "Public hub subnets for the ALB and management instances."
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
 
-variable "private_web_subnet_cidrs" {
-  description = "ECS Fargate taken (NGINX), 1 per AZ."
+variable "hub_private_subnet_cidrs" {
+  description = "Private hub subnets used for the TGW attachment."
   type        = list(string)
   default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
-variable "private_db_subnet_cidrs" {
-  description = "RDS MariaDB, 1 per AZ."
+variable "web_public_subnet_cidrs" {
+  description = "Public subnets for NAT gateways in the web spokes."
   type        = list(string)
-  default     = ["10.0.21.0/24", "10.0.22.0/24"]
+  default     = ["10.1.1.0/24", "10.2.1.0/24"]
+}
+
+variable "web_private_subnet_cidrs" {
+  description = "Private subnet for the NGINX server in each web spoke."
+  type        = list(string)
+  default     = ["10.1.11.0/24", "10.2.11.0/24"]
+}
+
+variable "database_private_subnet_cidrs" {
+  description = "Private RDS subnets in the database spoke."
+  type        = list(string)
+  default     = ["10.3.11.0/24", "10.3.12.0/24"]
 }
 
 variable "admin_cidr" {
@@ -49,7 +72,12 @@ variable "admin_cidr" {
   default = "0.0.0.0/0"
 }
 
-# --- Webservice (ECS Fargate) -----------------------------------------------
+variable "web_instance_type" {
+  type    = string
+  default = "t3.micro"
+}
+
+# --- Webservice --------------------------------------------------------------
 
 variable "container_image" {
   type    = string

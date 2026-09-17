@@ -5,7 +5,7 @@
 
 resource "aws_db_subnet_group" "this" {
   name       = "${var.project_name}-db-subnets"
-  subnet_ids = aws_subnet.private_db[*].id
+  subnet_ids = aws_subnet.database_private[*].id
   tags       = { Name = "${var.project_name}-db-subnets" }
 }
 
@@ -40,8 +40,8 @@ resource "aws_db_instance" "this" {
   instance_class = var.db_instance_class
 
   allocated_storage = 20
-  storage_type       = "gp3"
-  storage_encrypted  = true # gebruikt de standaard AWS-beheerde RDS-sleutel
+  storage_type      = "gp3"
+  storage_encrypted = true # gebruikt de standaard AWS-beheerde RDS-sleutel
 
   db_name  = var.db_name
   username = var.db_username
@@ -51,13 +51,13 @@ resource "aws_db_instance" "this" {
   vpc_security_group_ids = [aws_security_group.database.id]
 
   publicly_accessible = false # REQ-NCA-P1-02: nooit een publiek IP-adres
-  multi_az             = var.db_multi_az
+  multi_az            = var.db_multi_az
 
   backup_retention_period = 7
-  backup_window            = "02:00-03:00"
-  maintenance_window       = "sun:03:30-sun:04:30"
-  deletion_protection      = var.db_deletion_protection
-  skip_final_snapshot      = !var.db_deletion_protection
+  backup_window           = "02:00-03:00"
+  maintenance_window      = "sun:03:30-sun:04:30"
+  deletion_protection     = var.db_deletion_protection
+  skip_final_snapshot     = !var.db_deletion_protection
 
   tags = { Name = "${var.project_name}-db" }
 }

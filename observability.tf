@@ -5,7 +5,7 @@
 resource "aws_instance" "observability" {
   ami                         = data.aws_ami.al2023.id
   instance_type               = "t3.medium"
-  subnet_id                   = aws_subnet.public[1].id
+  subnet_id                   = aws_subnet.hub_public[1].id
   vpc_security_group_ids      = [aws_security_group.management.id]
   key_name                    = var.key_pair_name
   associate_public_ip_address = true

@@ -38,7 +38,7 @@ resource "aws_iam_instance_profile" "runner" {
 resource "aws_instance" "runner" {
   ami                         = data.aws_ami.al2023.id
   instance_type               = var.runner_instance_type
-  subnet_id                   = aws_subnet.public[0].id
+  subnet_id                   = aws_subnet.hub_public[0].id
   vpc_security_group_ids      = [aws_security_group.management.id]
   iam_instance_profile        = aws_iam_instance_profile.runner.name
   key_name                    = var.key_pair_name

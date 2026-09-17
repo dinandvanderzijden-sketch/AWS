@@ -9,7 +9,7 @@
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-alb-sg"
   description = "Inkomend HTTP/HTTPS vanaf internet."
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.hub.id
 
   ingress {
     description = "HTTP"
@@ -39,23 +39,24 @@ resource "aws_security_group" "alb" {
 
 # 2) Webserver (ECS/NGINX): alleen bereikbaar vanaf de ALB.
 resource "aws_security_group" "web" {
+  count       = 2
   name        = "${var.project_name}-web-sg"
   description = "Inkomend uitsluitend vanaf de ALB."
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.web[count.index].id
 
   ingress {
-    description     = "HTTP van de ALB"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    description = "HTTP van de ALB"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.hub_vpc_cidr]
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] # nodig voor ECR image pulls, Secrets Manager, CloudWatch
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   tags = { Name = "${var.project_name}-web-sg" }
@@ -65,14 +66,14 @@ resource "aws_security_group" "web" {
 resource "aws_security_group" "database" {
   name        = "${var.project_name}-db-sg"
   description = "Inkomend SQL-verkeer uitsluitend vanaf de webserver."
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.database.id
 
   ingress {
-    description     = "MariaDB vanaf de webserver"
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    security_groups = [aws_security_group.web.id]
+    description = "MariaDB vanaf de webserver"
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = var.web_vpc_cidrs
   }
 
   egress {
@@ -90,7 +91,7 @@ resource "aws_security_group" "database" {
 resource "aws_security_group" "management" {
   name        = "${var.project_name}-mgmt-sg"
   description = "SSH + Grafana uitsluitend vanaf admin_cidr."
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = aws_vpc.hub.id
 
   ingress {
     description = "SSH (beperk admin_cidr in productie!)"
@@ -118,13 +119,13 @@ resource "aws_security_group" "management" {
   tags = { Name = "${var.project_name}-mgmt-sg" }
 }
 
-# Prometheus (management-SG) mag de NGINX-exporter op de webservers bevragen.
 resource "aws_security_group_rule" "web_allow_scrape" {
-  type                     = "ingress"
-  security_group_id        = aws_security_group.web.id
-  source_security_group_id = aws_security_group.management.id
-  from_port                = 9100
-  to_port                  = 9187
-  protocol                 = "tcp"
-  description               = "Prometheus scraped exporters (node/nginx/mysql)"
+  count             = 2
+  type              = "ingress"
+  security_group_id = aws_security_group.web[count.index].id
+  cidr_blocks       = [var.hub_vpc_cidr]
+  from_port         = 9100
+  to_port           = 9187
+  protocol          = "tcp"
+  description       = "Prometheus scraped exporters"
 }

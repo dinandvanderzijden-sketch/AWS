@@ -8,12 +8,8 @@ output "db_endpoint" {
   sensitive = true
 }
 
-output "ecs_cluster_name" {
-  value = aws_ecs_cluster.this.name
-}
-
-output "ecs_service_name" {
-  value = aws_ecs_service.nginx.name
+output "nginx_private_ips" {
+  value = aws_instance.nginx[*].private_ip
 }
 
 output "runner_public_ip" {
