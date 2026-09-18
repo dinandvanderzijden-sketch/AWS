@@ -1,28 +1,12 @@
-# =============================================================================
-# security.tf — firewall-regels. Alles zit in dezelfde VPC, dus elke regel
-# hieronder verwijst gewoon naar de security group van de "buur" in plaats
-# van naar IP-reeksen — dat is korter én je hoeft nooit een CIDR bij te
-# werken als een subnet verandert.
-# =============================================================================
-
-# 1) ALB: open voor internet op 80/443.
-resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-alb-sg"
-  description = "Inkomend HTTP/HTTPS vanaf internet."
+# Load Balancer Security Group (Publiek HTTP/HTTPS)
+resource "aws_security_group" "alb_sg" {
+  name        = "alb-sg"
+  description = "Allow public HTTP/HTTPS"
   vpc_id      = aws_vpc.hub.id
 
   ingress {
-    description = "HTTP"
     from_port   = 80
     to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -33,23 +17,19 @@ resource "aws_security_group" "alb" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = { Name = "${var.project_name}-alb-sg" }
 }
 
-# 2) Webserver (ECS/NGINX): alleen bereikbaar vanaf de ALB.
-resource "aws_security_group" "web" {
-  count       = 2
-  name        = "${var.project_name}-web-sg"
-  description = "Inkomend uitsluitend vanaf de ALB."
-  vpc_id      = aws_vpc.web[count.index].id
+# Web Server (ECS Containers) Security Group
+resource "aws_security_group" "web_sg" {
+  name        = "web-ecs-sg"
+  description = "Allow HTTP from ALB"
+  vpc_id      = aws_vpc.spoke_web.id
 
   ingress {
-    description = "HTTP van de ALB"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [var.hub_vpc_cidr]
+    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"]
   }
 
   egress {
@@ -58,22 +38,39 @@ resource "aws_security_group" "web" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = { Name = "${var.project_name}-web-sg" }
 }
-
-# 3) Database: alleen bereikbaar vanaf de webservers, nergens anders vandaan.
-resource "aws_security_group" "database" {
-  name        = "${var.project_name}-db-sg"
-  description = "Inkomend SQL-verkeer uitsluitend vanaf de webserver."
-  vpc_id      = aws_vpc.database.id
+# Web Server (ECS Containers) Security Group
+resource "aws_security_group" "web_sg" {
+  name        = "web-ecs-sg"
+  description = "Allow HTTP from ALB"
+  vpc_id      = aws_vpc.spoke_web2.id
 
   ingress {
-    description = "MariaDB vanaf de webserver"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Database Security Group (REQ-NCA-P1-02: Geen publiek IP, uitsluitend bereikbaar via Spoke Web)
+resource "aws_security_group" "db_sg" {
+  name        = "db-maria-sg"
+  description = "Allow MySQL/MariaDB from Web Spoke only"
+  vpc_id      = aws_vpc.spoke_data.id
+
+  ingress {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = var.web_vpc_cidrs
+    cidr_blocks = ["10.1.0.0/16"]
   }
 
   egress {
@@ -82,50 +79,4 @@ resource "aws_security_group" "database" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = { Name = "${var.project_name}-db-sg" }
-}
-
-# 4) Management (CI/CD-runner + Prometheus/Grafana): SSH en Grafana-UI
-# uitsluitend vanaf jouw eigen IP/VPN (admin_cidr).
-resource "aws_security_group" "management" {
-  name        = "${var.project_name}-mgmt-sg"
-  description = "SSH + Grafana uitsluitend vanaf admin_cidr."
-  vpc_id      = aws_vpc.hub.id
-
-  ingress {
-    description = "SSH (beperk admin_cidr in productie!)"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
-  }
-
-  ingress {
-    description = "Grafana dashboard"
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = { Name = "${var.project_name}-mgmt-sg" }
-}
-
-resource "aws_security_group_rule" "web_allow_scrape" {
-  count             = 2
-  type              = "ingress"
-  security_group_id = aws_security_group.web[count.index].id
-  cidr_blocks       = [var.hub_vpc_cidr]
-  from_port         = 9100
-  to_port           = 9187
-  protocol          = "tcp"
-  description       = "Prometheus scraped exporters"
 }
