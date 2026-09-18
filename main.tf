@@ -6,10 +6,10 @@ terraform {
       version = "~> 5.0"
     }
   }
-  backend "s3" {
-    bucket = "innovation-bucket" 
+backend "s3" {
+    bucket = "tfstate-eu-west-1-491799435972" # De zojuist aangemaakte bucket
     key    = "terraform/state.tfstate"
-    region = "us-east-1"
+    region = "eu-west-1"                       # Nu correct op eu-west-1
   }
 }
 
