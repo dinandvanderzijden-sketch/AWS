@@ -104,30 +104,34 @@ resource "aws_subnet" "data_private_b" {
   availability_zone = "${var.aws_region}b"
   tags              = { Name = "Spoke-Data-Private-B" }
 }
-
-
-resource "aws_vpc_peering_connection" "hub_to_web" {
+# VPC Peering: Hub <-> Spoke Web 1
+resource "aws_vpc_peering_connection" "hub_to_web1" {
   vpc_id      = aws_vpc.hub.id
-  peer_vpc_id = aws_vpc.spoke_web.id
+  peer_vpc_id = aws_vpc.spoke_web_1.id
   auto_accept = true
-  tags        = { Name = "Peering-Hub-Web" }
+  tags        = { Name = "Peering-Hub-Web1" }
 }
-# VPC PEERING (Hub <-> Spoke Web 2)
+
+# VPC Peering: Hub <-> Spoke Web 2
 resource "aws_vpc_peering_connection" "hub_to_web2" {
   vpc_id      = aws_vpc.hub.id
   peer_vpc_id = aws_vpc.spoke_web_2.id
   auto_accept = true
   tags        = { Name = "Peering-Hub-Web2" }
 }
-resource "aws_vpc_peering_connection" "web2_to_data" {
-  vpc_id      = aws_vpc.spoke_web.id
+
+# VPC Peering: Spoke Web 1 <-> Spoke Data
+resource "aws_vpc_peering_connection" "web1_to_data" {
+  vpc_id      = aws_vpc.spoke_web_1.id
   peer_vpc_id = aws_vpc.spoke_data.id
   auto_accept = true
-  tags        = { Name = "Peering-Web-Data" }
+  tags        = { Name = "Peering-Web1-Data" }
 }
-resource "aws_vpc_peering_connection" "web_to_data" {
-  vpc_id      = aws_vpc.spoke_web.id
+
+# VPC Peering: Spoke Web 2 <-> Spoke Data
+resource "aws_vpc_peering_connection" "web2_to_data" {
+  vpc_id      = aws_vpc.spoke_web_2.id
   peer_vpc_id = aws_vpc.spoke_data.id
   auto_accept = true
-  tags        = { Name = "Peering-Web-Data" }
+  tags        = { Name = "Peering-Web2-Data" }
 }
