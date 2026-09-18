@@ -84,16 +84,38 @@ resource "aws_ecs_task_definition" "nginx" {
   }])
 }
 
-resource "aws_ecs_service" "web" {
-  name            = "nginx-service"
+# ECS Service 1 - Draait in Spoke 1 VPC
+resource "aws_ecs_service" "web_spoke_1" {
+  name            = "nginx-service-spoke1"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.nginx.arn
-  desired_count   = 2
+  desired_count   = 1
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = [aws_subnet.web_private_a.id, aws_subnet.web_private_b.id]
-    security_groups  = [aws_security_group.web_sg.id]
+    subnets          = [aws_subnet.web1_private_a.id]
+    security_groups  = [aws_security_group.web1_sg.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.ecs_tg.arn
+    container_name   = "nginx"
+    container_port   = 80
+  }
+}
+
+# ECS Service 2 - Draait in Spoke 2 VPC
+resource "aws_ecs_service" "web_spoke_2" {
+  name            = "nginx-service-spoke2"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.nginx.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.web2_private_b.id]
+    security_groups  = [aws_security_group.web2_sg.id]
     assign_public_ip = false
   }
 

@@ -19,17 +19,17 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# Web Server (ECS Containers) Security Group
-resource "aws_security_group" "web_sg" {
-  name        = "web-ecs-sg"
-  description = "Allow HTTP from ALB"
-  vpc_id      = aws_vpc.spoke_web.id
+# Security Group voor Spoke 1 Web
+resource "aws_security_group" "web1_sg" {
+  name        = "web1-ecs-sg"
+  description = "Allow HTTP from ALB to Spoke 1"
+  vpc_id      = aws_vpc.spoke_web_1.id
 
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"]
+    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"] # Vanuit Hub ALB
   }
 
   egress {
@@ -39,17 +39,18 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-# Web Server (ECS Containers) Security Group
+
+# Security Group voor Spoke 2 Web
 resource "aws_security_group" "web2_sg" {
-  name        = "web-ecs-sg"
-  description = "Allow HTTP from ALB"
-  vpc_id      = aws_vpc.spoke_web2.id
+  name        = "web2-ecs-sg"
+  description = "Allow HTTP from ALB to Spoke 2"
+  vpc_id      = aws_vpc.spoke_web_2.id
 
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"]
+    cidr_blocks = ["10.0.2.0/24", "10.0.3.0/24"] # Vanuit Hub ALB
   }
 
   egress {
