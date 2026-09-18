@@ -9,7 +9,7 @@ terraform {
   backend "s3" {
     bucket = "innovation-bucket" 
     key    = "terraform/state.tfstate"
-    region = "eu-west-1"
+    region = "us-east-1"
   }
 }
 
