@@ -111,13 +111,13 @@ resource "aws_vpc_peering_connection" "hub_to_web" {
   auto_accept = true
   tags        = { Name = "Peering-Hub-Web" }
 }
-resource "aws_vpc_peering_connection" "hub_to_web" {
+resource "aws_vpc_peering_connection" "hub_to_web2" {
   vpc_id      = aws_vpc.hub.id
   peer_vpc_id = aws_vpc.spoke_web2.id
   auto_accept = true
   tags        = { Name = "Peering-Hub-Web" }
 }
-resource "aws_vpc_peering_connection" "web_to_data" {
+resource "aws_vpc_peering_connection" "web2_to_data" {
   vpc_id      = aws_vpc.spoke_web.id
   peer_vpc_id = aws_vpc.spoke_data.id
   auto_accept = true

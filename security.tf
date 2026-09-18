@@ -40,7 +40,7 @@ resource "aws_security_group" "web_sg" {
   }
 }
 # Web Server (ECS Containers) Security Group
-resource "aws_security_group" "web_sg" {
+resource "aws_security_group" "web2_sg" {
   name        = "web-ecs-sg"
   description = "Allow HTTP from ALB"
   vpc_id      = aws_vpc.spoke_web2.id
