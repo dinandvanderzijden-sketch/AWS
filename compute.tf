@@ -1,4 +1,4 @@
-# ECR Repository voor Docker images
+# ECR Repository voor Docker images Deploy
 resource "aws_ecr_repository" "app" {
   name                 = "nginx-app"
   image_tag_mutability = "MUTABLE"
