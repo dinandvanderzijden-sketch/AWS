@@ -1,4 +1,3 @@
-# ECR Repository voor Docker images Deploy
 resource "aws_ecr_repository" "app" {
   name                 = "nginx-app"
   image_tag_mutability = "MUTABLE"
@@ -46,8 +45,9 @@ resource "aws_ecs_cluster" "main" {
   name = "production-ecs-cluster"
 }
 
+# FIX: Unieke naam voor de IAM Role om 409 EntityAlreadyExists te voorkomen
 resource "aws_iam_role" "ecs_execution_role" {
-  name = "ecsExecutionRole"
+  name = "production-ecs-execution-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
