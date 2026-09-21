@@ -54,7 +54,12 @@ jobs:
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+      # 3. Force ECS Deployment Refresh voor beide Spoke Services
       - name: Force ECS Deployment Refresh
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
-          aws ecs update-service --cluster production-ecs-cluster --service nginx-service --force-new-deployment
+          echo "Updating Spoke 1 ECS Service..."
+          aws ecs update-service --cluster production-ecs-cluster --service nginx-service-spoke1 --force-new-deployment --region eu-west-1
+
+          echo "Updating Spoke 2 ECS Service..."
+          aws ecs update-service --cluster production-ecs-cluster --service nginx-service-spoke2 --force-new-deployment --region eu-west-1
