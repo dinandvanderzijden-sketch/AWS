@@ -1,0 +1,52 @@
+{
+  "family": "nginx-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::491799435972:role/production-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::491799435972:role/production-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "nginx",
+      "image": "PLACEHOLDER",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 80, "hostPort": 80, "protocol": "tcp" }
+      ],
+      "secrets": [
+        { "name": "DB_PASSWORD", "valueFrom": "prod/mariadb/credentials:password::" },
+        { "name": "DB_USERNAME", "valueFrom": "prod/mariadb/credentials:username::" }
+      ],
+      "environment": [
+        { "name": "DB_HOST", "value": "terraform-2026092507564485620000000c.cbc6kyug8ovy.eu-west-1.rds.amazonaws.com" },
+        { "name": "DB_NAME", "value": "appdb" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nginx-task",
+          "awslogs-region": "eu-west-1",
+          "awslogs-stream-prefix": "nginx"
+        }
+      }
+    },
+    {
+      "name": "nginx-exporter",
+      "image": "nginx/nginx-prometheus-exporter:1.1.0",
+      "essential": false,
+      "command": ["--nginx.scrape-uri=http://localhost:80/nginx_status"],
+      "portMappings": [
+        { "containerPort": 9113, "hostPort": 9113, "protocol": "tcp" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nginx-task",
+          "awslogs-region": "eu-west-1",
+          "awslogs-stream-prefix": "nginx-exporter"
+        }
+      }
+    }
+  ]
+}
