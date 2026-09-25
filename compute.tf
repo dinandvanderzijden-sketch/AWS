@@ -58,11 +58,17 @@ resource "aws_lb_listener" "http" {
     target_group_arn = aws_lb_target_group.blue.arn
   }
 
-  # CodeDeploy herschrijft deze default_action tijdens elke Blue/Green-deploy;
-  # Terraform moet die wijziging daarna met rust laten.
-  lifecycle {
-    ignore_changes = [default_action]
-  }
+  # MIGRATIE: lifecycle-block hieronder is bewust UIT voor deze apply, zodat
+  # Terraform de listener nu daadwerkelijk naar de blue target group mag zetten
+  # (dat kon niet met ignore_changes aan, want de listener bestond al en wees
+  # nog naar de oude, inmiddels verwijderde target group). Zodra deze apply
+  # succesvol is afgerond: zet het blok hieronder terug aan en run nog een keer
+  # `terraform apply` (dat levert dan geen wijzigingen meer op) zodat
+  # CodeDeploy vanaf nu ongestoord blue/green-swaps kan doen.
+  #
+  # lifecycle {
+  #   ignore_changes = [default_action]
+  # }
 }
 
 # ============================================================
