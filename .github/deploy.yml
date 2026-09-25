@@ -1,0 +1,84 @@
+name: "AWS Infrastructure & App CI/CD"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  deploy:
+    name: "Deploy Infrastructure & Application"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: eu-west-1
+
+      # 1. Terraform stappen
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve
+
+      # 2. Docker build & push naar ECR
+      - name: Log in op Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, Tag, and Push Docker Image
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: nginx-app
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # 3. Nieuwe task definition-revisie met de zojuist gepushte image
+      - name: Render new task definition
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: nginx
+          image: ${{ steps.build-image.outputs.image }}
+
+      # 4. Blue/Green deploy via CodeDeploy. De service draait met
+      #    deployment_controller = CODE_DEPLOY, dus een gewone
+      #    `aws ecs update-service --force-new-deployment` werkt hier niet meer -
+      #    dat moet nu via CodeDeploy.
+      - name: Deploy via CodeDeploy (Blue/Green)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: nginx-service
+          cluster: production-ecs-cluster
+          codedeploy-appspec: appspec.yaml
+          codedeploy-application: nginx-web-app
+          codedeploy-deployment-group: nginx-web-dg
+          wait-for-service-stability: true
