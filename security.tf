@@ -63,7 +63,7 @@ resource "aws_security_group" "web_sg" {
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "AWS API's (ECR pull, Secrets Manager, CloudWatch Logs) via NAT. Het ontwerpdocument beperkt egress tot poort 3306, maar dat blokkeert image-pulls en secret-injectie - vandaar deze aanvulling."
+    description = "AWS APIs (ECR pull, Secrets Manager, CloudWatch Logs) via NAT. Het ontwerpdocument beperkt egress tot poort 3306, maar dat blokkeert image-pulls en secret-injectie - vandaar deze aanvulling."
   }
 
   tags = { Name = "web-ecs-sg" }
