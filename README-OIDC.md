@@ -76,12 +76,27 @@ gevolgd door "Deploy Infrastructure & Application".
 | `github-actions-deploy` | **alleen** push naar `main` | aanmaken, wijzigen, verwijderen |
 
 De beveiliging zit volledig in de *trust policy* van de rollen. GitHub stuurt
-een `sub`-claim mee, en die wordt exact vergeleken:
+een `sub`-claim mee, en die wordt exact vergeleken. Let op de **numerieke
+IDs**: GitHub gebruikt niet `repo:owner/repo`, maar
+`repo:<owner>@<owner_id>/<repo>@<repo_id>`. Vergelijken op IDs is veiliger dan
+op namen, want een repo kan hernoemd worden en een ID niet.
 
 ```
-repo:dinandvanderzijden-sketch/AWS:ref:refs/heads/main   -> mag deployen
-repo:dinandvanderzijden-sketch/AWS:pull_request           -> mag alleen lezen
+repo:dinandvanderzijden-sketch@229950911/AWS@1372748269:ref:refs/heads/main
+  -> mag deployen
+repo:dinandvanderzijden-sketch@229950911/AWS@1372748269:pull_request
+  -> mag alleen lezen
 ```
+
+De IDs staan in `variables.tf` (`github_owner_id`, `github_repo_id`); de
+samengestelde strings in `locals.github_sub_branch` en `locals.github_sub_pr`
+in `oidc.tf`. Ze staan op `https://api.github.com/users/<owner>` en
+`https://api.github.com/repos/<owner>/<repo>`.
+
+Verandert GitHub dit formaat ooit, dan faalt de inlog met
+`Not authorized to perform sts:AssumeRoleWithWebIdentity`. De stap
+"Toon de OIDC-claims" in de workflow print de werkelijke claims, dus dan
+zie je meteen wat er moet worden aangepast.
 
 Iemand die alleen pull-rechten heeft op de repo kan dus `main` **niet**
 misbruiken. En een pull request uit een fork krijgt de read-only rol, waar

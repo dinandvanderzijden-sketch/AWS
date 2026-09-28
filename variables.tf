@@ -16,10 +16,28 @@ variable "key_pair_name" {
   default     = ""
 }
 
-variable "github_repo" {
-  description = "OWNER/REPO van de GitHub-repository die via OIDC naar AWS mag deployen. Wordt gebruikt voor de IAM trust-policy ('repo:<OWNER/REPO>:...')."
+variable "github_owner" {
+  description = "Eigenaar van de GitHub-repository die via OIDC naar AWS mag."
   type        = string
-  default     = "dinandvanderzijden-sketch/AWS"
+  default     = "dinandvanderzijden-sketch"
+}
+
+variable "github_owner_id" {
+  description = "Numerieke user-ID van de repo-eigenaar. Onderdeel van de OIDC 'sub'-claim; zie locals.github_sub_branch in oidc.tf. vind je op https://api.github.com/users/<owner>"
+  type        = string
+  default     = "229950911"
+}
+
+variable "github_repo_name" {
+  description = "Naam van de GitHub-repository (zonder eigenaar)."
+  type        = string
+  default     = "AWS"
+}
+
+variable "github_repo_id" {
+  description = "Numerieke ID van de repository. Onderdeel van de OIDC 'sub'-claim. vind je op https://api.github.com/repos/<owner>/<repo>"
+  type        = string
+  default     = "1372748269"
 }
 
 variable "github_branch" {

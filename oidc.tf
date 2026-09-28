@@ -22,6 +22,17 @@
 # ============================================================
 
 locals {
+  # De exacte 'sub'-claims die GitHub meestuurt in het OIDC-token. LET OP:
+  # sinds kort bevat sub de numerieke IDs, dus het is NIET meer
+  # "repo:owner/repo:ref:..." maar:
+  #   repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/<branch>
+  # Beide staan hieronder gecontroleerd getest tegen een echt token.
+  # Met de ID-vorm vergelijk je op IDs in plaats van namen: een repo kan
+  # hernoemd worden, een ID niet. Dat is veiliger tegen een repo die een
+  # gelijkende naam krijgt aangemaakt.
+  github_sub_branch = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo_name}@${var.github_repo_id}:ref:refs/heads/${var.github_branch}"
+  github_sub_pr     = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo_name}@${var.github_repo_id}:pull_request"
+
   # De rollen die deze stack zelf aanmaakt. Terraform heeft iam:PassRole nodig
   # voor deze resources, en we scopen die permissie bewust per rol.
   managed_role_arns = [
@@ -57,9 +68,13 @@ resource "aws_iam_openid_connect_provider" "github" {
 #
 # De trust-policy is het belangrijkste beveiligingsonderdeel van deze hele
 # aanpak. De 'sub'-claim die GitHub meestuurt is exact
-# "repo:<owner>/<repo>:ref:refs/heads/main", en STS accepteert de rol alleen
-# als die string exact klopt. Iemand met alleen pull-rechten op de repo kan
-# 'main' dus niet misbruiken om te deployen.
+#   "repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/main"
+# en STS accepteert de rol alleen als die string klopt. Iemand met alleen
+# pull-rechten op de repo kan 'main' dus niet misbruiken om te deployen.
+#
+# Let op de @<id>-delen: GitHub gebruikt tegenwoordig die numerieke vorm, niet
+# de oudere "repo:<owner>/<repo>:...". Zie locals.github_sub_branch hieronder;
+# de strings zijn daar gecontroleerd getest tegen een echt token.
 # ------------------------------------------------------------
 resource "aws_iam_role" "github_actions_deploy" {
   name = "github-actions-deploy"
@@ -75,7 +90,7 @@ resource "aws_iam_role" "github_actions_deploy" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"
+          "token.actions.githubusercontent.com:sub" = local.github_sub_branch
         }
       }
     }]
@@ -216,7 +231,7 @@ resource "aws_iam_role" "github_actions_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"
+            "token.actions.githubusercontent.com:sub" = local.github_sub_branch
           }
         }
       }],
@@ -227,7 +242,7 @@ resource "aws_iam_role" "github_actions_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:pull_request"
+            "token.actions.githubusercontent.com:sub" = local.github_sub_pr
           }
         }
       }] : []
