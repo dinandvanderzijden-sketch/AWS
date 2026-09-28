@@ -25,6 +25,24 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # DIAGNOSE: toont exact welke claims GitHub meestuurt. De 'sub' hier moet
+      # gelijk zijn aan de string in de trust policy in oidc.tf, of AWSweigert
+      # de rol. Veilig om te laten staan: leest alleen het eigen token.
+      - name: Toon de OIDC-claims
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "GEEN id-token beschikbaar - 'id-token: write' ontbreekt in permissions"
+            exit 1
+          fi
+          TOKEN=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "=== claims uit het OIDC-token ==="
+          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq .
+          echo ""
+          echo "=== wat de trust policy verwacht ==="
+          echo "repo:dinandvanderzijden-sketch/AWS:ref:refs/heads/main"
+
       # Geen AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN meer.
       # De action doet sts:AssumeRoleWithWebIdentity met het korte OIDC-token
       # van deze job. De rol hieronder heeft alleen ReadOnlyAccess.
