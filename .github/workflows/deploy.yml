@@ -6,11 +6,12 @@ on:
       - main
   pull_request:
 
-# Least privilege: de workflow heeft geen federatieve token nodig om in te
-# loggen, dus die permissie ontbreekt bewust. 'contents: read' volstaat om de
-# code uit te checken.
+# 'id-token: write' is nodig om het OIDC-token op te vragen waarmee de
+# pipeline zichzelf bij AWS bewijst. Het geeft geen rechten op je resources:
+# het is alleen een bewijs van identiteit, dat AWS inruilt voor een rol.
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   # ==============================================================
@@ -62,26 +63,24 @@ jobs:
   # ==============================================================
   # 1. Plan/preview vóór uitrol (REQ-NCA-P1-07)
   #
-  #    LET OP - deze job is NIET meer read-only. Zonder OIDC is er één
-  #    sleutelset, en die heeft dezelfde rechten als de deploy-job. De
-  #    scheiding plan/deploy zat in de trust policy van de OIDC-rollen en is
-  #    met het verwijderen van OIDC verdwenen.
+  #    De uitslag van 'terraform plan' gaat naar de step summary van deze
+  #    run, zodat je ziet wat er gaat veranderen vóórdat de deploy-job
+  #    'terraform apply' doet.
   #
-  #    Wat dit openlaat: een pull request binnen deze repo draait dus met
-  #    schrijfrechten. Een PR uit een FORK krijgt daarom geen secrets van
-  #    GitHub en zou hier falen - daarom staat de `if`-guard hieronder, zodat
-  #    zo'n PR netjes wordt overgeslagen in plaats van te breken. De
-  #    lint-job draait wél voor iedereen.
-  #
-  #    Zie README.md voor de aanbevolen extra horde: zet de secrets op een
-  #    GitHub Environment, dan zijn ze alleen beschikbaar na een handmatige
-  #    goedkeuring.
+  #    Deze job draait alleen op een push naar main, en dus met dezelfde rol
+  #    als de deploy-job. Zie oidc.tf voor de trust policy: die staat
+  #    uitsluitend 'ref:refs/heads/main' toe, dus een pull request (uit deze
+  #    repo of uit een fork) kan de rol niet overnemen en komt hier nooit.
+  #    PR's draaien alleen de 'lint'-job hierboven, zonder AWS-toegang.
   # ==============================================================
   plan:
     name: "Validate & Plan"
     runs-on: ubuntu-latest
     needs: lint
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # Alleen een push naar main. Een pull request krijgt een OIDC-token met
+    # een andere 'sub' dan de rol in oidc.tf toestaat, dus die kan de rol niet
+    # overnemen. Daarom doen PR's alleen de 'lint'-job hierboven.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: read
 
@@ -89,47 +88,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Diagnose van de AWS-secrets
-        env:
-          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
-        run: |
-          set -euo pipefail
-          key_schoon="$(printf '%s' "$KEY" | tr -d '[:space:]')"
-          secret_schoon="$(printf '%s' "$SECRET" | tr -d '[:space:]')"
-          echo "sleutel     : voorvoegsel=${KEY:0:4} lengte=${#KEY} witruimte=$([ "$KEY" = "$key_schoon" ] && echo nee || echo JA)"
-          echo "secret      : lengte=${#SECRET} witruimte=$([ "$SECRET" = "$secret_schoon" ] && echo nee || echo JA)"
-          echo "sessietoken : $([ -n "$TOKEN" ] && echo aan || echo leeg)"
-          echo "verwacht    : AKIA + lengte 20 voor de sleutel, 40 voor de secret"
-
-      # De AWS-sleutels komen uit GitHub Secrets. Zie README.md voor de
-      # IAM-user die je daarvoor aanmaakt, en voor rotatie.
+      # Inloggen bij AWS. Er is geen secret: GitHub stuurt een OIDC-token mee
+      # en AWS ruilt dat in voor deze rol. Zie oidc.tf voor de trust policy.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # Sinds 9f92d7f. Een tijdelijke STS-sleutel (ASIA...) is zonder
-          # session token onbruikbaar: AWS keurt elke ondertekening af als
-          # ongeldig. Voor een langdurige sleutel (AKIA...) is de regel
-          # onschadelijk; dan is de secret gewoon leeg.
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::491799435972:role/github-actions-deploy
           aws-region: eu-west-1
-
-      # Zelfcontrole. Zou er ooit een access key van een persoon of uit een
-      # ander systeem in de secrets belanden, dan faalt deze stap hard in
-      # plaats van stilletjes met die sleutel te draaien. GetCallerIdentity
-      # hoeft geen enkele IAM-permissie.
-      - name: Controleer dat we als de CI-gebruiker binnenkomen
-        run: |
-          set -euo pipefail
-          ARN=$(aws sts get-caller-identity --query Arn --output text)
-          echo "Ingelogd als: $ARN"
-          case "$ARN" in
-            arn:aws:iam::*:user/github-actions-deploy) echo "OK: de CI-gebruiker" ;;
-            *) echo "FOUT: dit is niet de IAM-user github-actions-deploy ($ARN)."; exit 1 ;;
-          esac
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -172,41 +137,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Diagnose van de AWS-secrets
-        env:
-          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
-        run: |
-          set -euo pipefail
-          key_schoon="$(printf '%s' "$KEY" | tr -d '[:space:]')"
-          secret_schoon="$(printf '%s' "$SECRET" | tr -d '[:space:]')"
-          echo "sleutel     : voorvoegsel=${KEY:0:4} lengte=${#KEY} witruimte=$([ "$KEY" = "$key_schoon" ] && echo nee || echo JA)"
-          echo "secret      : lengte=${#SECRET} witruimte=$([ "$SECRET" = "$secret_schoon" ] && echo nee || echo JA)"
-          echo "sessietoken : $([ -n "$TOKEN" ] && echo aan || echo leeg)"
-          echo "verwacht    : AKIA + lengte 20 voor de sleutel, 40 voor de secret"
-
+      # Inloggen bij AWS. Er is geen secret: GitHub stuurt een OIDC-token mee
+      # en AWS ruilt dat in voor deze rol. Zie oidc.tf voor de trust policy.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # Sinds 9f92d7f. Een tijdelijke STS-sleutel (ASIA...) is zonder
-          # session token onbruikbaar: AWS keurt elke ondertekening af als
-          # ongeldig. Voor een langdurige sleutel (AKIA...) is de regel
-          # onschadelijk; dan is de secret gewoon leeg.
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::491799435972:role/github-actions-deploy
           aws-region: eu-west-1
-
-      - name: Controleer dat we als de CI-gebruiker binnenkomen
-        run: |
-          set -euo pipefail
-          ARN=$(aws sts get-caller-identity --query Arn --output text)
-          echo "Ingelogd als: $ARN"
-          case "$ARN" in
-            arn:aws:iam::*:user/github-actions-deploy) echo "OK: de CI-gebruiker" ;;
-            *) echo "FOUT: dit is niet de IAM-user github-actions-deploy ($ARN)."; exit 1 ;;
-          esac
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

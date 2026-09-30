@@ -42,6 +42,7 @@ Volledige uitleg, bewijsvoering en de lijst met openstaande punten staan in
 |---|---|
 | `main.tf` | Provider, S3-backend met locking, alle `output`s voor de pipeline |
 | `variables.tf` | Alle invoer, fail-closed qua beveiliging |
+| `oidc.tf` | OIDC-provider en de rol `github-actions-deploy` waarmee de pipeline inlogt |
 | `network.tf` | Hub-and-spoke VPC's, Transit Gateway, subnetten, route tables |
 | `security.tf` | Security-group-matrix (deny-all, per poort expliciet toegestaan) |
 | `compute.tf` | ECR, ALB, blue/green target groups, ECS-cluster/-service/-taakdefinitie, autoscaling |
@@ -89,92 +90,55 @@ push naar main  --->  lint --->  plan (preview) --->  deploy
 ```
 
 - **lint** draait zonder AWS-credentials en zonder `terraform init`. Draait
-  ook voor pull requests uit forks.
+  voor elke push en elke pull request, ook uit forks.
 - **plan** voert `terraform test` uit en zet het volledige plan in de step
-  summary. Vereist AWS-credentials, dus hij wordt overgeslagen voor PR's uit
-  forks.
-- **deploy** draait alleen bij een push naar `main` en haalt alle
-  resourcenamen uit `terraform output` in plaats van uit hardcoded strings.
+  summary. Vereist de OIDC-rol, dus draait alleen bij een push naar `main`.
+- **deploy** doet `terraform apply`, haalt alle resourcenamen uit
+  `terraform output` in plaats van uit hardcoded strings, en draait alleen bij
+  een push naar `main`.
 
-### De AWS-credentials voor CI
+### Hoe de pipeline inlogt bij AWS
 
-De pipeline logt in met een access key van een eigen IAM-user
-`github-actions-deploy`, die in GitHub Secrets staat. Die user staat bewust
-**buiten** Terraform: zo blijft de git-repo de enige bron van waarheid voor de
-infrastructuur, en de credentials kunnen niet per ongeluk meegecommit worden.
+Via **OIDC**. Er is geen access key, geen secret en niets om in te vullen.
 
-Aanmaken, eenmalig, met je eigen account:
+Zo werkt het: als een job start, vraagt GitHub een kort token op (een JWT). De
+action `aws-actions/configure-aws-credentials` stuurt dat naar AWS, en AWS
+ruilt het in voor tijdelijke credentials van de rol `github-actions-deploy`.
+Het token leeft een paar minuten en is één keer bruikbaar.
 
-```bash
-aws iam create-user --user-name github-actions-deploy
-aws iam create-access-key --user-name github-actions-deploy
-```
+Wat je daarvoor in GitHub doet: **niets**. Geen secret aanmaken, geen sleutel
+plakken, niets roteren. Er staat dan ook geen `secrets.AWS_*` meer in de
+workflow, en dat houdt de tests ook in de gaten.
 
-Daarnaast heeft de user nodig: `PowerUserAccess` (alles behalve IAM) en een
-eigen policy met `iam:PassRole` op precies de vier rollen die deze stack
-gebruikt. Let op de namen — dit zijn de AWS-namen, niet de Terraform-labels:
+De rol en de trust policy staan in [`oidc.tf`](oidc.tf).
 
-| Terraform-label (`*.tf`) | AWS-rolnaam (in policies en console) |
-|---|---|
-| `aws_iam_role.ecs_execution_role` | `production-ecs-execution-role` |
-| `aws_iam_role.ecs_task_role` | `production-ecs-task-role` |
-| `aws_iam_role.monitoring` | `monitoring-ec2-role` |
-| `aws_iam_role.codedeploy_role` | `ecs-codedeploy-role` |
-
-Voor lezen en schrijven van de state is geen aparte policy nodig:
-`PowerUserAccess` dekt al alle S3-acties, en dus ook de state-bucket
-`tfstate-eu-west-1-491799435972`. De policies uit de OIDC-opzet staan in
-`git show 93a1ae3:oidc.tf`.
-
-Staat er in je account nog een OIDC-provider uit de vorige opzet, dan moet je
-die eerst vrijgeven voordat Terraform hem mag verwijderen. AWS weigert een
-provider te verwijderen zolang er nog een client op `sts` `actions-to-access`
-toestaat:
+**Wat je één keer moet doen** is de rol aanmaken, lokaal of met je eigen
+credentials:
 
 ```bash
-aws iam update-open-id-connect-provider-client \
-  --open-id-connect-provider-arn <arn> --client-id sts \
-  --no-enable-actions-to-access-oidc
+terraform apply
 ```
 
-Het verwijderen van de provider is een `terraform apply` en dus niet meer
-terug te draaien. Wil je hem eerst laten staan, zet `oidc.tf` dan terug uit
-`git show 93a1ae3:oidc.tf`.
+Dat maakt de OIDC-provider en de rol aan. Daarna werkt de pipeline. Let op:
+de eerste keer moet dat nog met jouw eigen credentials, want de rol bestaat
+dan nog niet.
 
-Vervolgens in GitHub: **Settings -> Secrets and variables -> Actions**:
+#### Wat de trust policy toestaat
 
-| Secret | Waarde | Wanneer |
-|---|---|---|
-| `AWS_ACCESS_KEY_ID` | uit `create-access-key` | altijd |
-| `AWS_SECRET_ACCESS_KEY` | uit `create-access-key` | altijd |
-| `AWS_SESSION_TOKEN` | leeg laten bij een langdurige sleutel | alleen bij een tijdelijke `ASIA...`-sleutel |
+Precies één ding: een push naar `main` in deze repo. Een pull request — uit
+deze repo of uit een fork — krijgt een andere `sub` en komt er dus niet in.
+Daarom draait de `plan`-job alleen op een push naar `main`, en doen PR's
+alleen de `lint`-job, zonder AWS-toegang.
 
-Let op de derde regel: de workflow stuurt sinds `9f92d7f` een
-`aws-session-token` mee. Een tijdelijke STS-sleutel (`ASIA...`) is zonder
-session token onbruikbaar, omdat AWS dan elke ondertekening als ongeldig
-afkeurt. Heb je een langdurige sleutel (`AKIA...`), laat deze secret dan leeg.
+Wil je tóch een plan zien bij een pull request, dan moet er een tweede,
+read-only rol bij. Dat is bewust niet gedaan: één rol is simpeler, en de
+veiligheidswinst van de huidige opzet is groter dan het gemak.
 
-Elke job controleert met `aws sts get-caller-identity` of hij werkelijk als
-deze user binnenkomt, en faalt hard als dat niet zo is.
+#### Als de inlog toch misgaat
 
-**Twee dingen om te weten over deze opzet:**
-
-1. **De plan-job is niet meer read-only.** Toen de pipeline via OIDC liep zat
-   de scheiding tussen plan en deploy in de trust policy van twee rollen. Die
-   laag is er nu niet meer: de plan-job draait met dezelfde sleutel als de
-   deploy-job. Een pull request binnen deze repo draait dus met
-   schrijfrechten. Een PR uit een *fork* krijgt daarentegen geen secrets van
-   GitHub en wordt netjes overgeslagen.
-2. **Statische keys blijven geldig als de repo verdwijnt.** Behandel ze als een
-   wachtwoord: roteer ze, en overweeg de twee maatregelen hieronder.
-
-Aanbevolen als je punt 1 wilt afdekken:
-
-- Zet de secrets op een **GitHub Environment** met een verplichte
-  goedkeurder. De deploy-job krijgt dan `environment: <naam>` en een mens
-  moet de release akkoord geven voordat er iets naar AWS gaat.
-- Roteer de key zodra iemand met repo-toegang de repo verlaat.
-
+Foutmelding `Not authorized to perform sts:AssumeRoleWithWebIdentity` betekent
+dat de `sub` van het token niet in de trust policy staat. De foutmelding toont
+de volledige `sub`; zet die letterlijk in `subs_main` in `oidc.tf`.
 ## Variabelen die je waarschijnlijk wilt zetten
 
 | Variabele | Default | Waarom |
@@ -185,7 +149,9 @@ Aanbevolen als je punt 1 wilt afdekken:
 | `key_pair_name` | `""` | Alleen nodig als je echt SSH wilt; anders beheer je via SSM Session Manager. |
 | `enable_spoke_endpoints` | `true` | Noodzakelijk, geen optimalisatie: zonder deze endpoints blijven de taken op PENDING staan. Zie TESTPLAN T13.3. |
 | `enable_self_hosted_runner` | `false` | Zet pas aan als je de workflow ook omzet naar `runs-on: [self-hosted, linux]`. Zie TESTPLAN T7. |
-| `github_repo` | `dinandvanderzijden-sketch/AWS` | Alleen voor het registreren van de self-hosted runner; de actieve pipeline gebruikt GitHub-gehoste runners. |
+| `github_repo` | `dinandvanderzijden-sketch/AWS` | Bepaalt wie de rol uit `oidc.tf` mag overnemen: alleen een push naar `main` in deze repo. Ook gebruikt om de self-hosted runner te registreren. |
+| `github_owner_id` | `229950911` | Numerieke eigenaar-ID voor de `sub`-claim in het OIDC-token. |
+| `github_repo_id` | `1372748269` | Numerieke repo-ID voor de `sub`-claim in het OIDC-token. |
 
 Volledige beschrijvingen staan in `variables.tf`.
 

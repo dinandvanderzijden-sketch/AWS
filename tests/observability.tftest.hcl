@@ -14,6 +14,59 @@ mock_provider "random" {}
 # Zie de toelichting in application.tftest.hcl: waarden die pas na de apply
 # bekend zijn, worden hier met override_during = plan vastgezet zodat de
 # condities tijdens het plannen te evalueren zijn.
+# De IAM-policy's uit oidc.tf komen uit aws_iam_policy_document. Omdat de
+# aws-provider hier gemockt is, levert die data source anders een mockwaarde
+# in plaats van geldige JSON, en weigert de provider het 'policy'-argument.
+# Hetzelfde JSON als in oidc.tf, zodat de tests de echte configuratie blijven
+# controleren.
+override_data {
+  target          = data.aws_iam_policy_document.iam_bootstrap
+  override_during = plan
+  values = {
+    json = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Sid      = "BeheerDeIamRollenEnPoliciesVanDezeStack"
+          Effect   = "Allow"
+          Action   = ["iam:CreateRole", "iam:DeleteRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:CreatePolicy", "iam:DeletePolicy"]
+          Resource = ["*"]
+        },
+        {
+          Sid      = "GeefAlleenDeVierStackrollenDoor"
+          Effect   = "Allow"
+          Action   = ["iam:PassRole"]
+          Resource = ["arn:aws:iam::491799435972:role/production-ecs-execution-role"]
+        },
+      ]
+    })
+  }
+}
+
+override_data {
+  target          = data.aws_iam_policy_document.state_bucket
+  override_during = plan
+  values = {
+    json = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Sid      = "LeesDeStateBucket"
+          Effect   = "Allow"
+          Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+          Resource = ["arn:aws:s3:::tfstate-eu-west-1-491799435972"]
+        },
+        {
+          Sid      = "LeesEnSchrijfStateObjects"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = ["arn:aws:s3:::tfstate-eu-west-1-491799435972/*"]
+        },
+      ]
+    })
+  }
+}
+
 override_resource {
   target          = aws_db_instance.mariadb
   override_during = plan
@@ -263,15 +316,19 @@ run "de_remote_state_ligt_in_een_bucket_met_locking" {
     error_message = "De state staat niet op de verwachte sleutel; de IAM-permissies hieronder kloppen dan niet."
   }
 
-  # De credentials waarmee de pipeline draait, moeten de state-bucket kunnen
-  # lezen en schrijven. Die rechten zitten niet meer in deze stack maar in de
-  # IAM-user 'github-actions-deploy' (zie README.md), dus controleer hier alleen
-  # dat de backend-configuratie en de regels in README/TESTPLAN niet uit elkaar
-  # zijn gelopen: de bucketnaam moet in de documentatie overeenkomen met die in
-  # het backend-blok.
+  # De rol die de pipeline overneemt moet de state-bucket kunnen lezen en
+  # schrijven; die rechten staan in oidc.tf. Hier controleren we dat de
+  # bucketnaam in de documentatie overeenkomt met die in het backend-blok.
   assert {
     condition     = strcontains(file("${path.module}/main.tf"), "bucket       = \"tfstate-eu-west-1-491799435972\"") || strcontains(file("${path.module}/main.tf"), "bucket = \"tfstate-eu-west-1-491799435972\"")
     error_message = "De state-bucket in het backend-blok van main.tf wijkt af van die in de documentatie (README.md, TESTPLAN.md T10)."
+  }
+
+  # En dat de rol uit oidc.tf dezelfde bucket gebruikt, anders kan 'terraform
+  # init' in de pipeline de backend niet openen.
+  assert {
+    condition     = strcontains(file("${path.module}/oidc.tf"), "var.tfstate_bucket")
+    error_message = "oidc.tf verwijst niet naar var.tfstate_bucket; de rol mist dan de rechten op de bucket waarin de state ligt."
   }
 }
 
@@ -279,47 +336,41 @@ run "de_remote_state_ligt_in_een_bucket_met_locking" {
 # REQ-NCA-P1-07: pipeline - authenticatie, preview, tests
 # ============================================================
 
-run "de_pipeline_logt_in_met_aws_sleutels_uit_github_secrets" {
+run "de_pipeline_logt_in_via_oidc_in_plaats_van_vaste_sleutels" {
   command = plan
 
-  # Authenticatie loopt via een IAM-user in GitHub Secrets. De OIDC-provider en
-  # de bijbehorende rollen zijn uit de stack verwijderd, dus de workflow mag
-  # nergens meer naar een OIDC-rol verwijzen.
+  # Authenticatie loopt via OIDC: GitHub stuurt een token mee en AWS ruilt dat
+  # in voor de rol uit oidc.tf. Er is daardoor geen secret om aan te maken.
   assert {
-    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "aws-access-key-id: $${{ secrets.AWS_ACCESS_KEY_ID }}")
-    error_message = "De workflow leest AWS_ACCESS_KEY_ID niet uit de GitHub-secrets; zonder die configuratie kan hij niet inloggen."
+    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "role-to-assume: arn:aws:iam::491799435972:role/github-actions-deploy")
+    error_message = "De workflow neemt de rol github-actions-deploy niet over; zonder 'role-to-assume' kan de job niet inloggen."
   }
 
   assert {
-    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "aws-secret-access-key: $${{ secrets.AWS_SECRET_ACCESS_KEY }}")
-    error_message = "De workflow leest AWS_SECRET_ACCESS_KEY niet uit de GitHub-secrets."
+    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "id-token: write")
+    error_message = "De workflow vraagt geen 'id-token: write' aan; zonder die permissie levert GitHub geen OIDC-token en faalt de inlog."
+  }
+
+  # Het hele punt van OIDC: er staat geen langdurige sleutel in de repo. Zou er
+  # toch een key of session token in de secrets staan, dan is de opzet
+  # onnodig riskant en verloopt die bovendien.
+  assert {
+    condition     = !strcontains(file("${path.module}/.github/workflows/deploy.yml"), "secrets.AWS_ACCESS_KEY_ID")
+    error_message = "De workflow leest nog AWS_ACCESS_KEY_ID uit de secrets. Met OIDC is er geen sleutel nodig; een langdurige sleutel in de repo is precies wat deze opzet voorkomt."
   }
 
   assert {
-    condition     = !strcontains(file("${path.module}/.github/workflows/deploy.yml"), "role-to-assume")
-    error_message = "De workflow gebruikt nog 'role-to-assume'; die OIDC-rol bestaat niet meer, dus de job faalt met AccessDenied."
+    condition     = !strcontains(file("${path.module}/.github/workflows/deploy.yml"), "secrets.AWS_SECRET_ACCESS_KEY")
+    error_message = "De workflow leest nog AWS_SECRET_ACCESS_KEY uit de secrets; zie de opmerking hierboven."
   }
 
+  # De trust policy in oidc.tf staat alleen 'ref:refs/heads/main' toe. Een pull
+  # request krijgt een andere 'sub' en kan de rol dus niet overnemen. De
+  # plan-job moet daarom ook alleen op main draaien, anders loopt hij vast op
+  # een rol die hij niet mag hebben.
   assert {
-    condition     = !strcontains(file("${path.module}/.github/workflows/deploy.yml"), "id-token")
-    error_message = "De workflow vraagt nog een id-token aan; dat is alleen nodig voor OIDC en is inmiddels een overbodige permissie."
-  }
-
-  # Least privilege: statische keys blijven geldig na het verwijderen van de
-  # repo, dus ze horen bij een eigen IAM-user - niet bij een persoonlijke
-  # sleutel of het root-account. De guard faalt hard in plaats van stilzwijgend
-  # met de verkeerde sleutel te draaien.
-  assert {
-    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "arn:aws:iam::*:user/github-actions-deploy")
-    error_message = "De workflow controleert niet of hij met de IAM-user github-actions-deploy inlogt; zonder die guard zou een per ongeluk ingevulde persoonlijke sleutel stilletjes doorwerken."
-  }
-
-  # Fork-PR's krijgen geen secrets van GitHub. Zonder deze guard zou de
-  # plan-job daar elke keer op een authenticatiefout struikelen in plaats van
-  # netjes te worden overgeslagen.
-  assert {
-    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "github.event.pull_request.head.repo.full_name == github.repository")
-    error_message = "De plan-job slaat PR's uit een fork niet over; die krijgen geen secrets en zouden de job laten falen."
+    condition     = strcontains(file("${path.module}/.github/workflows/deploy.yml"), "if: github.ref == 'refs/heads/main' && github.event_name == 'push'")
+    error_message = "De plan-job draait niet alleen op een push naar main; een pull request kan de OIDC-rol niet overnemen en zou de job laten falen."
   }
 }
 
@@ -407,15 +458,6 @@ run "de_pipeline_haalt_zijn_namen_uit_terraform_in_plaats_van_hardcoded_strings"
     error_message = "De workflow bevat de servicenaam als hardcoded string. Haal hem op via `terraform output -raw ecs_service_name`."
   }
 
-  # De IAM-rollen die de workflow nodig heeft (PowerUserAccess + IAM-beheer
-  # voor de rollen in deze stack + lees/schrijfrechten op de state-bucket)
-  # zitten in de IAM-user github-actions-deploy, buiten deze stack. Zie
-  # README.md voor de exacte policy; hier controleren we dat de workflow daar
-  # ook echt naar verwijst.
-  assert {
-    condition     = !strcontains(file("${path.module}/.github/workflows/deploy.yml"), "491799435972:role/")
-    error_message = "De workflow verwijst naar een vastgezet rol-ARN. Die rollen horen in een IAM-user buiten Terraform, zodat de git-repo de enige bron van waarheid blijft."
-  }
 }
 
 run "de_workflow_runt_eerst_tests_voordat_er_iets_naar_aws_gaat" {

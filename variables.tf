@@ -103,9 +103,32 @@ variable "prometheus_image" {
 # --- CI/CD (REQ-NCA-P1-07) --------------------------------------
 
 variable "github_repo" {
-  description = "GitHub-repository als 'owner/rerepo', alleen gebruikt om de self-hosted runner in runner.tf te registreren. De actieve pipeline gebruikt GitHub-gehoste runners met AWS-sleutels uit GitHub Secrets; die hebben geen repo-binding nodig."
+  description = "GitHub-repository als 'owner/repo'. Bepaalt wie de rol uit oidc.tf mag overnemen: alleen een push naar main in deze repo. Wordt ook gebruikt om de self-hosted runner in runner.tf te registreren."
   type        = string
   default     = "dinandvanderzijden-sketch/AWS"
+}
+
+# Sinds 15 juli 2026 stuurt GitHub in de 'sub'-claim numerieke IDs mee naast
+# de namen. De trust policy in oidc.tf accepteert beide vormen, dus deze twee
+# zijn alleen nodig voor de nieuwe. Wil je ze opzoeken: open de repo op
+# github.com, en haal de IDs uit het OIDC-token (of uit een mislukte
+# AssumeRoleWithWebIdentity-foutmelding, die de sub-claim volledig toont).
+variable "github_owner_id" {
+  description = "Numerieke ID van de GitHub-eigenaar, voor de sub-claim van het OIDC-token."
+  type        = string
+  default     = "229950911"
+}
+
+variable "github_repo_id" {
+  description = "Numerieke ID van de GitHub-repository, voor de sub-claim van het OIDC-token."
+  type        = string
+  default     = "1372748269"
+}
+
+variable "tfstate_bucket" {
+  description = "Bucket waarin de Terraform-state ligt. De rol uit oidc.tf krijgt hier lees- en schrijfrechten op, zodat de pipeline de backend kan openen."
+  type        = string
+  default     = "tfstate-eu-west-1-491799435972"
 }
 
 variable "enable_self_hosted_runner" {

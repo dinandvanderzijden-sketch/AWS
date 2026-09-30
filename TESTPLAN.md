@@ -29,7 +29,7 @@ Er zijn twee soorten tests:
 | T8 | Autoscaling onder belasting | P1-04, P1-05 | handmatig | open |
 | T9 | Blue/green-deployment en rollback | P1-04 | handmatig | open |
 | T10 | State-locking werkt | P1-06 | handmatig | open |
-| T11 | CI-credentials: juiste IAM-user, geen OIDC-restanten | P1-07 | geautomatiseerd | ✅ |
+| T11 | CI-credentials: OIDC, geen sleutel in de repo | P1-07 | geautomatiseerd | ✅ |
 | T12 | Git-repo als enige bron van waarheid | P1-08 | geautomatiseerd | ✅ |
 | T13 | Eerste `terraform apply` in echt AWS | P1-01 t/m P1-08 | handmatig | ⚠️ gedeeltelijk |
 
@@ -125,9 +125,9 @@ Success! 25 passed, 0 failed.
   switch overleeft
 - de backend gebruikt `use_lockfile = true` en de bucket komt overeen met die
   in de documentatie
-- de workflow leest de AWS-sleutels uit de GitHub-secrets, bevat geen
-  `role-to-assume` en geen token-permissie meer, controleert dat hij als IAM-user
-  `github-actions-deploy` inlogt, en slaat PR's uit een fork over
+- de workflow neemt de rol `github-actions-deploy` over, vraagt
+  `id-token: write` aan, leest géén AWS-sleutels uit de secrets en draait
+  alleen op een push naar `main`
 - de runner draait zonder publiek IP in het management-subnet
 - de workflow haalt zijn namen uit `terraform output` en bevat geen
   hardcoded clusternaam of servicenaam
@@ -375,12 +375,11 @@ gh api repos/:OWNER/:REPO/actions/runners
 Zet daarna in `.github/workflows/deploy.yml` `runs-on: [self-hosted, linux]`
 voor de `deploy`-job.
 
-**Let op bij het omzeten van `runs-on`:** de pipeline logt nu in met
-AWS-sleutels uit GitHub Secrets (zie T11). Die blijven werken op de
-self-hosted runner, dus het omzetten van `runs-on` op zichzelf is genoeg. Wil
-je in plaats daarvan de instance-profielrol gebruiken, dan moet de
-IAM-user `github-actions-deploy` `iam:PassRole` op
-`nca-github-runner-role` krijgen — anders heeft de taak geen AWS-credentials.
+**Let op bij het omzetten van `runs-on`:** met OIDC (zie T11) hoeft er niets aan
+de credentials te veranderen; de rol wordt op elke runner overgenomen. Wil je in
+plaats daarvan de instance-profielrol van de EC2 zelf gebruiken, dan moet de rol
+`github-actions-deploy` `iam:PassRole` op `nca-github-runner-role` krijgen —
+anders heeft de taak geen AWS-credentials.
 
 **Terugdraaien:**
 
@@ -505,47 +504,45 @@ vul `dynamodb_table` in — en maak die tabel dan vóór de eerste init aan.
 
 ---
 
-## T11 — CI-credentials: juiste IAM-user, geen OIDC-restanten
+## T11 — CI-credentials: OIDC, geen sleutel in de repo
 
 **Geautomatiseerd.** `tests/observability.tftest.hcl` bevat de run
-`de_pipeline_logt_in_met_aws_sleutels_uit_github_secrets`. Die controleert dat
+`de_pipeline_logt_in_via_oidc_in_plaats_van_vaste_sleutels`. Die controleert dat
 de workflow:
 
-- `AWS_ACCESS_KEY_ID` en `AWS_SECRET_ACCESS_KEY` uit de GitHub-secrets leest
-- nergens meer `role-to-assume` gebruikt (de OIDC-rol bestaat niet meer, dus
-  dat zou een job met `AccessDenied` opleveren)
-- nergens meer een token-permissie aanvraagt
-- met `aws sts get-caller-identity` controleert dat hij als IAM-user
-  `github-actions-deploy` inlogt, en hard faalt bij een andere identiteit
-- PR's uit een fork over slaat, want daar deelt GitHub geen secrets
+- de rol `github-actions-deploy` overneemt met `role-to-assume`
+- `id-token: write` aanvraagt, zonder die permissie levert GitHub geen token
+- nergens `AWS_ACCESS_KEY_ID` of `AWS_SECRET_ACCESS_KEY` uit de secrets leest
+- alleen op een push naar `main` draait, want alleen die 'sub' staat in de
+  trust policy
 
-**Verwacht:** in GitHub staan precies twee secrets, `AWS_ACCESS_KEY_ID` en
-`AWS_SECRET_ACCESS_KEY`, van de IAM-user `github-actions-deploy`; en de
-pipeline-run is groen.
+**Verwacht:** er staan géén AWS-secrets in GitHub, en een push naar `main`
+levert een groene run op met `Ingelogd als: ...assumed-role/github-actions-deploy`.
 
-**Bewijs:** de groene testregel, plus de stap "Controleer dat we als de
-CI-gebruiker binnenkomen" met de regel `OK: de CI-gebruiker`.
+**Bewijs:** de groene testregel, plus de regel `Ingelogd als:` in de log van de
+plan-job.
 
-### Wat hier bewust minder sterk is dan met OIDC
+### Wat dit oplevert tegenover een eigen access key
 
-Met OIDC zat de scheiding tussen plan en deploy in de trust policy: de
-plan-job nam een read-only rol over, de deploy-job een rol met
-schrijfrechten, en beide alleen vanaf een push naar `main`. Een pull request
-kon daardoor nooit deployen.
+Een access key in GitHub Secrets is langdurig: hij blijft geldig als de repo
+verdwijnt, moet met de hand gerouleerd worden, en komt in de log terecht als een
+iemand de workflow verkeerd instelt. Met OIDC is daar niets van: er is geen
+sleutel om te bewaren, te roteren of per ongeluk te lekken. Het token dat
+GitHub meestuurt leeft een paar minuten en is één keer bruikbaar.
 
-Met statische sleutels is die laag weg. De plan-job draait met dezelfde sleutel
-als de deploy-job, dus een pull request binnen deze repo draait met
-schrijfrechten. Twee dingen beperken de schade:
+### Wat hier bewust minder sterk is dan met twee rollen
 
-1. GitHub deelt geen secrets met een pull request uit een **fork**. Daarom
-   overslaat de plan-job die expliciet, in plaats van te breken.
-2. Zet de secrets op een **GitHub Environment** met een verplichte
-   goedkeurder. Dan is een release een beslissing van een mens en niet van
-   een push. Zie README.md, "De AWS-credentials voor CI".
+De eerdere opzet had naast de deploy-rol ook een read-only plan-rol, zodat een
+pull request wél een plan kon tonen. Met één rol kan dat niet: een pull request
+krijgt een andere 'sub' en komt de rol niet binnen.
 
-Wil je de oude grens terug, dan is OIDC de weg - de policies hiervoor staan in
-de git-historie (`git show 93a1ae3:oidc.tf`).
+Daarom draait de plan-job nu alleen op een push naar `main`, en doet een pull
+request alleen de `lint`-job, zonder AWS-toegang. Dat is een bewuste keuze:
+minder functie, maar de grens tussen "iets bekijken" en "iets uitrollen" loopt
+nu volledig langs de branch, niet langs een rol.
 
+Wil je de oude grens terug, dan is het toevoegen van een read-only rol met
+`pull_request` in `subs_main` een kwestie van een paar regels in `oidc.tf`.
 ## T12 — Git-repo als enige bron van waarheid
 
 **Geautomatiseerd.** `tests/observability.tftest.hcl` controleert dat de

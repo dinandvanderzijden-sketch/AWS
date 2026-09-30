@@ -21,6 +21,59 @@ mock_provider "random" {}
 # security group naar een andere (cross-VPC kan dat niet - zie de test
 # hieronder); deze overrides zijn er voor de leesbaarheid en om de
 # toekomstige volgorde van het plan te stabiliseren.
+# De IAM-policy's uit oidc.tf komen uit aws_iam_policy_document. Omdat de
+# aws-provider hier gemockt is, levert die data source anders een mockwaarde
+# in plaats van geldige JSON, en weigert de provider het 'policy'-argument.
+# Hetzelfde JSON als in oidc.tf, zodat de tests de echte configuratie blijven
+# controleren.
+override_data {
+  target          = data.aws_iam_policy_document.iam_bootstrap
+  override_during = plan
+  values = {
+    json = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Sid      = "BeheerDeIamRollenEnPoliciesVanDezeStack"
+          Effect   = "Allow"
+          Action   = ["iam:CreateRole", "iam:DeleteRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:CreatePolicy", "iam:DeletePolicy"]
+          Resource = ["*"]
+        },
+        {
+          Sid      = "GeefAlleenDeVierStackrollenDoor"
+          Effect   = "Allow"
+          Action   = ["iam:PassRole"]
+          Resource = ["arn:aws:iam::491799435972:role/production-ecs-execution-role"]
+        },
+      ]
+    })
+  }
+}
+
+override_data {
+  target          = data.aws_iam_policy_document.state_bucket
+  override_during = plan
+  values = {
+    json = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Sid      = "LeesDeStateBucket"
+          Effect   = "Allow"
+          Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+          Resource = ["arn:aws:s3:::tfstate-eu-west-1-491799435972"]
+        },
+        {
+          Sid      = "LeesEnSchrijfStateObjects"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+          Resource = ["arn:aws:s3:::tfstate-eu-west-1-491799435972/*"]
+        },
+      ]
+    })
+  }
+}
+
 override_resource {
   target          = aws_security_group.alb_sg
   override_during = plan
