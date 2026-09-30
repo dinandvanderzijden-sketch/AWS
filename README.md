@@ -110,12 +110,21 @@ aws iam create-user --user-name github-actions-deploy
 aws iam create-access-key --user-name github-actions-deploy
 ```
 
-Daarnaast heeft de user nodig: `PowerUserAccess` (alles behalve IAM), een
-eigen policy voor het IAM-beheer van de vier rollen in deze stack
-(`ecs_execution_role`, `ecs_task_role`, `monitoring`, `codedeploy_role`) met
-`iam:PassRole` op precies die vier rollen, en lees/schrijfrechten op de
-state-bucket `tfstate-eu-west-1-491799435972`. De exacte policies stonden
-eerder in `oidc.tf` en zijn terug te vinden in de git-historie.
+Daarnaast heeft de user nodig: `PowerUserAccess` (alles behalve IAM) en een
+eigen policy met `iam:PassRole` op precies de vier rollen die deze stack
+gebruikt. Let op de namen — dit zijn de AWS-namen, niet de Terraform-labels:
+
+| Terraform-label (`*.tf`) | AWS-rolnaam (in policies en console) |
+|---|---|
+| `aws_iam_role.ecs_execution_role` | `production-ecs-execution-role` |
+| `aws_iam_role.ecs_task_role` | `production-ecs-task-role` |
+| `aws_iam_role.monitoring` | `monitoring-ec2-role` |
+| `aws_iam_role.codedeploy_role` | `ecs-codedeploy-role` |
+
+Voor lezen en schrijven van de state is geen aparte policy nodig:
+`PowerUserAccess` dekt al alle S3-acties, en dus ook de state-bucket
+`tfstate-eu-west-1-491799435972`. De policies uit de OIDC-opzet staan in
+`git show 93a1ae3:oidc.tf`.
 
 Staat er in je account nog een OIDC-provider uit de vorige opzet, dan moet je
 die eerst vrijgeven voordat Terraform hem mag verwijderen. AWS weigert een
