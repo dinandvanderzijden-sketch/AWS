@@ -6,75 +6,128 @@ on:
       - main
   pull_request:
 
-# Beltje aan: GitHub raakt de secrets hierdoor NIET aan. Authenticatie loopt
-# volledig via OIDC (zie oidc.tf). 'id-token: write' is wat GitHub nodig heeft
-# om het OIDC-token uit te geven; 'contents: read' om de code uit te checken.
+# Least privilege: de workflow heeft geen federatieve token nodig om in te
+# loggen, dus die permissie ontbreekt bewust. 'contents: read' volstaat om de
+# code uit te checken.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
-  plan:
-    name: "Validate & Plan (read-only)"
+  # ==============================================================
+  # 0. Snelle kwaliteitschecks - draait zonder AWS-credentials.
+  #
+  #    REQ-NCA-P1-07 eist dat een push "automatisch tests" triggert. In de
+  #    eerdere versie gebeurde er na 'terraform validate' niets meer: een
+  #    syntactisch geldige maar kapotte configuratie (verkeerde verwijzing,
+  #    onbekende variabele, onveilige security group) rolde gewoon uit.
+  #    Deze job vangt dat op vóórdat er iets naar AWS gaat.
+  # ==============================================================
+  lint:
+    name: "Lint & Format"
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # DIAGNOSE: toont exact welke claims GitHub meestuurt. De 'sub' hier moet
-      # gelijk zijn aan de string in de trust policy in oidc.tf, of AWSweigert
-      # de rol. Veilig om te laten staan: leest alleen het eigen token.
-      - name: Toon de OIDC-claims
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.2
+
+      # Bewust GEEN 'terraform init': voor fmt en validate is geen provider
+      # nodig. Zo blijft deze job ook werken als de S3-backend of de
+      # AWS-credentials niet bereikbaar zijn - ook bij een PR uit een fork,
+      # waar GitHub geen secrets meestuurt.
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Validate (zonder backend)
+        run: terraform init -backend=false -input=false && terraform validate -no-color
+
+      # De README en de documentatie verwijzen naar REQ-ID's en bestanden.
+      # Een test die faalt als een REQ-ID uit de requirementslijst verdwijnt,
+      # is een bewakersrol voor het onderzoeksdocument.
+      - name: Controleer dat de REQ-ID's nog in de README staan
         run: |
           set -euo pipefail
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "GEEN id-token beschikbaar - 'id-token: write' ontbreekt in permissions"
-            exit 1
-          fi
-          TOKEN=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          echo "=== claims uit het OIDC-token ==="
-          echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq .
-          echo ""
-          echo "=== wat de trust policy verwacht ==="
-          echo "repo:dinandvanderzijden-sketch/AWS:ref:refs/heads/main"
+          for req in REQ-NCA-P1-01 REQ-NCA-P1-02 REQ-NCA-P1-03 REQ-NCA-P1-04 \
+                     REQ-NCA-P1-05 REQ-NCA-P1-06 REQ-NCA-P1-07 REQ-NCA-P1-08; do
+            grep -q "$req" README.md || { echo "FOUT: $req ontbreekt in README.md"; exit 1; }
+            echo "OK  $req"
+          done
 
-      # Geen AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN meer.
-      # De action doet sts:AssumeRoleWithWebIdentity met het korte OIDC-token
-      # van deze job. De rol hieronder heeft alleen ReadOnlyAccess.
-      - name: Assume read-only AWS role via OIDC
+  # ==============================================================
+  # 1. Plan/preview vóór uitrol (REQ-NCA-P1-07)
+  #
+  #    LET OP - deze job is NIET meer read-only. Zonder OIDC is er één
+  #    sleutelset, en die heeft dezelfde rechten als de deploy-job. De
+  #    scheiding plan/deploy zat in de trust policy van de OIDC-rollen en is
+  #    met het verwijderen van OIDC verdwenen.
+  #
+  #    Wat dit openlaat: een pull request binnen deze repo draait dus met
+  #    schrijfrechten. Een PR uit een FORK krijgt daarom geen secrets van
+  #    GitHub en zou hier falen - daarom staat de `if`-guard hieronder, zodat
+  #    zo'n PR netjes wordt overgeslagen in plaats van te breken. De
+  #    lint-job draait wél voor iedereen.
+  #
+  #    Zie README.md voor de aanbevolen extra horde: zet de secrets op een
+  #    GitHub Environment, dan zijn ze alleen beschikbaar na een handmatige
+  #    goedkeuring.
+  # ==============================================================
+  plan:
+    name: "Validate & Plan"
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # De AWS-sleutels komen uit GitHub Secrets. Zie README.md voor de
+      # IAM-user die je daarvoor aanmaakt, en voor rotatie.
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::491799435972:role/github-actions-plan
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-west-1
 
-      # Zelfcontrole. Zou er ooit toch een access key in de GitHub-secrets
-      # belanden, dan faalt deze stap hard in plaats van stilletjes door te
-      # draaien. GetCallerIdentity hoeft geen enkele IAM-permissie.
-      - name: Controleer dat we via OIDC binnenkomen
+      # Zelfcontrole. Zou er ooit een access key van een persoon of uit een
+      # ander systeem in de secrets belanden, dan faalt deze stap hard in
+      # plaats van stilletjes met die sleutel te draaien. GetCallerIdentity
+      # hoeft geen enkele IAM-permissie.
+      - name: Controleer dat we als de CI-gebruiker binnenkomen
         run: |
           set -euo pipefail
           ARN=$(aws sts get-caller-identity --query Arn --output text)
           echo "Ingelogd als: $ARN"
           case "$ARN" in
-            *:assumed-role/github-actions-*) echo "OK: OIDC werkt" ;;
-            *) echo "FOUT: niet via OIDC binnengekomen. Staan er nog AWS_*-secrets in GitHub?"; exit 1 ;;
+            arn:aws:iam::*:user/github-actions-deploy) echo "OK: de CI-gebruiker" ;;
+            *) echo "FOUT: dit is niet de IAM-user github-actions-deploy ($ARN)."; exit 1 ;;
           esac
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.5.0
+          terraform_version: 1.16.2
 
       - name: Terraform Init
         run: terraform init -no-color
 
       - name: Terraform Validate
         run: terraform validate -no-color
+
+      # 'terraform test' voert de assertions uit in tests/*.tftest.hcl. Met
+      # 'command = plan' worden ze gecontroleerd zonder dat er iets in AWS
+      # verandert.
+      - name: Terraform Tests (plan-based assertions)
+        run: terraform test -no-color
 
       - name: Terraform Plan
         id: plan
@@ -94,38 +147,33 @@ jobs:
     needs: plan
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
-      id-token: write
       contents: read
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # De deploy-role: trust-policy accepteert uitsluitend de subject
-      # "repo:<owner>/<repo>:ref:refs/heads/main". Een pull request, en dus
-      # ook een fork, krijgt 'm hier nooit voor.
-      - name: Assume deploy AWS role via OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::491799435972:role/github-actions-deploy
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-west-1
 
-      # Zelfcontrole, zie toelichting bij dezelfde stap in de plan-job.
-      - name: Controleer dat we via OIDC binnenkomen
+      - name: Controleer dat we als de CI-gebruiker binnenkomen
         run: |
           set -euo pipefail
           ARN=$(aws sts get-caller-identity --query Arn --output text)
           echo "Ingelogd als: $ARN"
           case "$ARN" in
-            *:assumed-role/github-actions-*) echo "OK: OIDC werkt" ;;
-            *) echo "FOUT: niet via OIDC binnengekomen. Staan er nog AWS_*-secrets in GitHub?"; exit 1 ;;
+            arn:aws:iam::*:user/github-actions-deploy) echo "OK: de CI-gebruiker" ;;
+            *) echo "FOUT: dit is niet de IAM-user github-actions-deploy ($ARN)."; exit 1 ;;
           esac
 
-      # 1. Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.5.0
+          terraform_version: 1.16.2
 
       - name: Terraform Init
         run: terraform init -no-color
@@ -137,10 +185,30 @@ jobs:
       - name: Terraform Plan (voor de apply)
         run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
 
+      # REQ-NCA-P1-07: "Infrastructuurwijzigingen tonen eerst een plan/preview
+      # alvorens automatisch of handmatig worden goedgekeurd en toegepast."
+      # De plan staat al in de step summary van de plan-job; deze stap haalt de
+      # namen uit de state zodat de onderstaande stappen niet meer naar
+      # cluster-, service- of codedeploy-namen hoeven te verwijzen. Die namen
+      # stonden hier voorheen hardcoded en konden zo uit sync raken met de
+      # werkelijke infrastructuur (REQ-NCA-P1-08).
+      - name: Haal de resourcenamen uit de Terraform-output
+        id: names
+        run: |
+          set -euo pipefail
+          {
+            echo "cluster=$(terraform output -raw ecs_cluster_name)"
+            echo "service=$(terraform output -raw ecs_service_name)"
+            echo "app=$(terraform output -raw codedeploy_app_name)"
+            echo "dg=$(terraform output -raw codedeploy_deployment_group_name)"
+            echo "ecr=$(terraform output -raw ecr_repository_url)"
+            echo "db=$(terraform output -raw database_endpoint)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Terraform Apply
         run: terraform apply -no-color -input=false -auto-approve tfplan
 
-      # 2. Docker build & push naar ECR
+      # 1. Docker build & push naar ECR
       - name: Log in op Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -149,7 +217,7 @@ jobs:
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: nginx-app
+          ECR_REPOSITORY: ${{ steps.names.outputs.ecr }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
@@ -159,10 +227,17 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # 3. Nieuwe task-definition-revisie met de zojuist gepushte image
+      # 2. Nieuwe task-definition-revisie met de zojuist gepushte image
       #
-      # Deze stap is NIET weglaten. Zonder render maak je geen nieuwe revisie
-      # aan, en zou CodeDeploy de oude image blijven deployen.
+      #    Deze stap is NIET weglaten. Zonder render maak je geen nieuwe revisie
+      #    aan, en zou CodeDeploy de oude image blijven deployen.
+      #
+      #    De 'overrides' hieronder zijn de fix voor een echte drift-bug:
+      #    task-definition.json bevatte een hardcoded RDS-endpoint. Als de
+      #    database ooit werd vervangen of hernoemd, bleef de uitgerolde taak
+      #    naar het oude adres wijzen terwijl Terraform al de nieuwe had. Nu komt
+      #    DB_HOST uit de Terraform-output en kan dat niet meer gebeuren
+      #    (REQ-NCA-P1-03: omgevingsvariabelen via geautomatiseerde variabelen).
       - name: Render new task definition
         id: render-task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -170,23 +245,46 @@ jobs:
           task-definition: task-definition.json
           container-name: nginx
           image: ${{ steps.build-image.outputs.image }}
+          overrides: |
+            [
+              {
+                "name": "nginx",
+                "environment": [
+                  { "name": "DB_HOST", "value": "${{ steps.names.outputs.db }}" },
+                  { "name": "DB_NAME", "value": "appdb" }
+                ]
+              }
+            ]
 
-      # 4. Blue/green deploy via CodeDeploy
+      # 3. Blue/green deploy via CodeDeploy
       #
-      # De ECS-service draait met deployment_controller = "CODE_DEPLOY"
-      # (compute.tf). Daarom werkt 'aws ecs update-service
-      # --force-new-deployment' hier niet: dat slaat de verkeersshift over.
-      #
-      # NB: de vorige versie van deze workflow riep --service
-      # nginx-service-spoke1 / nginx-service-spoke2 aan. Die services bestaan
-      # niet in deze stack; de echte service heet 'nginx-service'.
+      #    De ECS-service draait met deployment_controller = "CODE_DEPLOY"
+      #    (compute.tf). Daarom werkt 'aws ecs update-service
+      #    --force-new-deployment' hier niet: dat slaat de verkeersshift over.
       - name: Deploy via CodeDeploy (Blue/Green)
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-task-def.outputs.task-definition }}
-          service: nginx-service
-          cluster: production-ecs-cluster
+          service: ${{ steps.names.outputs.service }}
+          cluster: ${{ steps.names.outputs.cluster }}
           codedeploy-appspec: appspec.yaml
-          codedeploy-application: nginx-web-app
-          codedeploy-deployment-group: nginx-web-dg
+          codedeploy-application: ${{ steps.names.outputs.app }}
+          codedeploy-deployment-group: ${{ steps.names.outputs.dg }}
           wait-for-service-stability: true
+
+      # 4. Bewijs dat de nieuwe versie echt verkeerskrijgt. Zonder deze stap
+      #    is een geslaagde deployment onvindbaar in bewijs.
+      - name: Bevestig dat de site de nieuwe versie serveert
+        run: |
+          set -euo pipefail
+          ALB=$(terraform output -raw alb_dns_name)
+          for i in $(seq 1 20); do
+            if body=$(curl -fsS --max-time 5 "http://$ALB/" 2>/dev/null); then
+              echo "HTTP 200 via $ALB (poging $i)"
+              echo "$body" | grep -o '<h1>[^<]*</h1>' || true
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "FOUT: de ALB gaf na 100 seconden geen 200 terug."
+          exit 1

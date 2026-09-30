@@ -58,17 +58,15 @@ resource "aws_lb_listener" "http" {
     target_group_arn = aws_lb_target_group.blue.arn
   }
 
-  # MIGRATIE: lifecycle-block hieronder is bewust UIT voor deze apply, zodat
-  # Terraform de listener nu daadwerkelijk naar de blue target group mag zetten
-  # (dat kon niet met ignore_changes aan, want de listener bestond al en wees
-  # nog naar de oude, inmiddels verwijderde target group). Zodra deze apply
-  # succesvol is afgerond: zet het blok hieronder terug aan en run nog een keer
-  # `terraform apply` (dat levert dan geen wijzigingen meer op) zodat
-  # CodeDeploy vanaf nu ongestoord blue/green-swaps kan doen.
-  #
-  # lifecycle {
-  #   ignore_changes = [default_action]
-  # }
+  # CodeDeploy is de eigenaar van deze listener zodra Blue/Green draait: bij
+  # elke deployment wisselt hij de default_action van blue naar green. Zonder
+  # dit blok zou elke `terraform apply` de listener terugzetten op blue en de
+  # traffic shift van CodeDeploy weggooien - de deployment zou dus na elke
+  # infra-apply terugvallen. Zelfde constructie voor task_definition en
+  # load_balancer bij de ECS-service hieronder.
+  lifecycle {
+    ignore_changes = [default_action]
+  }
 }
 
 # ============================================================
@@ -104,7 +102,7 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# De Execution Role heeft secretsmanager:GetSecretValue nodig: dit is wat de
+# De Execution Role heeft secretsmanager:GetSecretValue nodig: dit is wat het
 # "secrets" block in de task definition tijdens het opstarten injecteert.
 resource "aws_iam_role_policy" "ecs_execution_secrets" {
   name = "ecs-execution-read-db-secret"
@@ -271,7 +269,7 @@ resource "aws_ecs_service" "web" {
 # >70% CPU gedurende 5 min -> +2 taken; <20% CPU gedurende 10 min -> -2 taken
 # ============================================================
 resource "aws_appautoscaling_target" "ecs_target" {
-  max_capacity       = 4
+  max_capacity       = var.max_task_count
   min_capacity       = 2
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.web.name}"
   scalable_dimension = "ecs:service:DesiredCount"
@@ -308,8 +306,8 @@ resource "aws_appautoscaling_policy" "scale_in" {
     cooldown                = 600
     metric_aggregation_type = "Average"
     step_adjustment {
-      scaling_adjustment           = -2
-      metric_interval_upper_bound  = 0
+      scaling_adjustment          = -2
+      metric_interval_upper_bound = 0
     }
   }
 }
@@ -323,7 +321,14 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   period              = 60
   statistic           = "Average"
   threshold           = 70
-  alarm_actions       = [aws_appautoscaling_policy.scale_out.arn]
+  # alarm_actions: het autoscaling-beleid schaalt op, de SNS-topic meldt het
+  # aan een mens (REQ-NCA-P1-05: notificatie binnen 1 minuut). Beide zijn
+  # nodig - stap 1 zonder stap 2 is een alarm waar niemand op reageert.
+  alarm_actions = [
+    aws_appautoscaling_policy.scale_out.arn,
+    aws_sns_topic.alerts.arn,
+  ]
+  ok_actions = [aws_sns_topic.alerts.arn]
   dimensions = {
     ClusterName = aws_ecs_cluster.main.name
     ServiceName = aws_ecs_service.web.name
@@ -339,7 +344,11 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
   period              = 60
   statistic           = "Average"
   threshold           = 20
-  alarm_actions       = [aws_appautoscaling_policy.scale_in.arn]
+  alarm_actions = [
+    aws_appautoscaling_policy.scale_in.arn,
+    aws_sns_topic.alerts.arn,
+  ]
+  ok_actions = [aws_sns_topic.alerts.arn]
   dimensions = {
     ClusterName = aws_ecs_cluster.main.name
     ServiceName = aws_ecs_service.web.name

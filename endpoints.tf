@@ -3,34 +3,24 @@
 #
 # WAAROM DIT BESTAAT
 # De ECS-taken in 10.1.x hebben geen werkende route naar de AWS-API's. Hun
-# enige uitgang is: taak -> TGW -> hub-attachment (10.0.1.0/24) -> NAT
-# Gateway (10.0.2.0/24) -> internet. Die keten faalt: een taak met zelfs een
-# lege task definition blijft 4+ minuten op PENDING en sterft met
-# "connection issue between the task and Amazon CloudWatch".
-# De NAT Gateway zelf is gezond (ErrorPortAllocation = 0, stabiele
-# ActiveConnectionCount), dus het probleem zit in de route/retour-route
-# door de hub, niet in de NAT.
+# enige uitgang is: taak -> TGW -> hub-attachment -> NAT Gateway -> internet.
+# Die keten faalt: een taak met zelfs een lege task definition blijft 4+
+# minuten op PENDING en sterft met "connection issue between the task and
+# Amazon CloudWatch" (getest tijdens de eerste apply, zie TESTPLAN.md T13.3).
+# De NAT Gateway zelf was gezond, dus het probleem zat in de routering door de
+# hub, niet in de NAT.
 #
 # Met deze endpoints hebben de taken GEEN internetroute meer nodig: al het
 # AWS-verkeer loopt via een interface-endpoint binnen de eigen VPC. Dat lost
-# het probleem op én is tegelijk een securitywinst - de taken kunnen dan niet
-# meer het internet op, alleen nog de diensten die hier expliciet staan.
+# het probleem op én is een securitywinst - de taken kunnen dan niet meer het
+# internet op, alleen nog de diensten die hier expliciet staan.
 #
-# KOSTEN (eu-west-1, per uur, ongeveer):
-#   4 interface-endpoints  ~ $0.04/uur  ~ $29/maand
-#   1 gateway-endpoint     geen uurprijs, wel $0.01/GB data
-# Zet enable_spoke_endpoints op false om ze weer te verwijderen; dan
-# verwijdert Terraform ze weer.
+# KOSTEN (eu-west-1): 4 interface-endpoints ~ $29/maand; de gateway-endpoint
+# voor S3 heeft geen uurprijs, wel $0.01/GB data.
 # ============================================================
 
-variable "enable_spoke_endpoints" {
-  description = "Maak VPC-endpoints aan in het Spoke-Web zodat de ECS-taken de AWS-API's bereiken zonder via de NAT Gateway te lopen."
-  type        = bool
-  default     = true
-}
-
 locals {
-  # Interface-endpoints voor de API's die een taak nodig heeft om op te starten.
+  # De API's die een taak nodig heeft om op te starten.
   spoke_interface_services = [
     "secretsmanager", # task-definition 'secrets' blok (DB-wachtwoord)
     "logs",           # awslogs-logdriver
@@ -74,6 +64,22 @@ resource "aws_vpc_endpoint" "spoke_interface" {
   private_dns_enabled = true
   subnet_ids          = [aws_subnet.web_private_a.id, aws_subnet.web_private_b.id]
   security_group_ids  = [aws_security_group.spoke_endpoints_sg.id]
+
+  # De provider-default van 10 minuten is hier te krap. Bij de eerste apply
+  # bleven alle vier de endpoints na 10 minuten in state 'pending' staan en
+  # faalde de apply op de timeout. Bekend gedrag voor interface-endpoints in
+  # een VPC met Transit Gateway-attachments; de gateway-endpoint voor S3 werd
+  # in hetzelfde plan wél meteen beschikbaar, wat op de interface-specifieke
+  # aanlegstap wijst en niet op een fout in de configuratie.
+  #
+  # LET OP: dit is een ruimer venster, geen bewezen oplossing. Blijven ze na
+  # 30 minuten pending, dan is de oorzaak anders (bijvoorbeeld een quota of
+  # een service die niet in de betreffende AZ beschikbaar is) - zie
+  # TESTPLAN.md T13.3 voor de diagnose-stappen.
+  timeouts {
+    create = "30m"
+    delete = "30m"
+  }
 
   tags = { Name = "spoke-ep-${each.value}" }
 }

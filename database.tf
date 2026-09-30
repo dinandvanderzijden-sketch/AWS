@@ -51,26 +51,26 @@ resource "aws_db_subnet_group" "db_subnets" {
 }
 
 resource "aws_db_instance" "mariadb" {
-  allocated_storage    = 20
-  engine                = "mariadb"
-  engine_version        = "10.11"
-  instance_class        = "db.t3.micro" # Fontys-sandbox SCP blokkeert grotere instance-klassen
+  allocated_storage      = 20
+  engine                 = "mariadb"
+  engine_version         = "10.11"
+  instance_class         = "db.t3.micro" # Fontys-sandbox SCP blokkeert grotere instance-klassen
   db_name                = "appdb"
-  username                = var.db_username
-  password                = random_password.db_password.result
-  db_subnet_group_name    = aws_db_subnet_group.db_subnets.name
-  vpc_security_group_ids  = [aws_security_group.db_sg.id]
-  parameter_group_name    = aws_db_parameter_group.mariadb_tls.name
+  username               = var.db_username
+  password               = random_password.db_password.result
+  db_subnet_group_name   = aws_db_subnet_group.db_subnets.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  parameter_group_name   = aws_db_parameter_group.mariadb_tls.name
 
   publicly_accessible = false
-  multi_az             = true
-  storage_encrypted    = true
-  kms_key_id            = aws_kms_key.rds.arn
+  multi_az            = true
+  storage_encrypted   = true
+  kms_key_id          = aws_kms_key.rds.arn
 
   backup_retention_period = 7
-  backup_window            = "03:00-04:00"
-  copy_tags_to_snapshot    = true
-  skip_final_snapshot      = true # sandbox: zet dit op false + final_snapshot_identifier voor een echte productieomgeving
+  backup_window           = "03:00-04:00"
+  copy_tags_to_snapshot   = true
+  skip_final_snapshot     = true # sandbox: zet dit op false + final_snapshot_identifier voor een echte productieomgeving
 
   tags = { Name = "appdb-mariadb" }
 }

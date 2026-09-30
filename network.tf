@@ -99,8 +99,8 @@ resource "aws_route_table_association" "mgmt" {
 
 # ============================================================
 # SPOKE-WEB VPC (10.1.0.0/16) - NGINX/ECS Fargate over 2 AZ's
-# (dit is de 2-AZ HA-laag; zie de toelichting in de projectsamenvatting
-#  over waarom dit 1 VPC met 2 subnets is i.p.v. 2 losse spoke-VPC's)
+# (dit is de 2-AZ HA-laag; zie compute.tf voor waarom dit 1 VPC met
+# 2 subnets is i.p.v. 2 losse spoke-VPC's)
 # ============================================================
 resource "aws_vpc" "spoke_web" {
   cidr_block           = "10.1.0.0/16"
@@ -169,16 +169,29 @@ resource "aws_subnet" "data_private_b" {
 
 resource "aws_route_table" "spoke_data_rt" {
   vpc_id = aws_vpc.spoke_data.id
-  # Alleen terug naar web (db-antwoorden) en hub (exporter scraping) - bewust GEEN
-  # internetroute, zodat de database-laag geïsoleerd blijft (REQ-NCA-P1-02).
+
+  # LET OP - lees dit niet als "deze VPC heeft geen internetroute". De
+  # 0.0.0.0/0 -> Transit Gateway-route stuurt onbekende bestemmingen naar de
+  # hub, en de default route table van de TGW stuurt die door naar de NAT
+  # Gateway. Net als de web-spoke kan de data-spoke dus wél het internet op.
+  #
+  # Waarom we dat hier NIET dichtzetten: geen enkele database-server heeft
+  # uitgaand internet nodig, maar een specifieke Deny op de route zou een
+  # routering-uitzondering zijn om te onderhouden zonder veiligheidswinst. De
+  # daadwerkelijke afscherming zit in db_sg (alleen 3306 vanaf de web-spoke)
+  # en in het ontbreken van een publiek IP. Dat is ook de reden dat
+  # REQ-NCA-P1-02 hier geldt: geen publiek IP én een gesloten security group.
   route {
     cidr_block         = "10.1.0.0/16"
     transit_gateway_id = aws_ec2_transit_gateway.hub_tgw.id
   }
+
+  # Naar de hub, zodat Prometheus de DB-metrieken kan ophalen.
   route {
     cidr_block         = "10.0.0.0/16"
     transit_gateway_id = aws_ec2_transit_gateway.hub_tgw.id
   }
+
   tags       = { Name = "Spoke-Data-RT" }
   depends_on = [aws_ec2_transit_gateway_vpc_attachment.spoke_data]
 }
@@ -201,28 +214,28 @@ resource "aws_ec2_transit_gateway" "hub_tgw" {
   description                     = "Hub-and-Spoke TGW - Hub, Spoke-Web, Spoke-Data"
   default_route_table_association = "enable"
   default_route_table_propagation = "enable"
-  tags                             = { Name = "Hub-TGW" }
+  tags                            = { Name = "Hub-TGW" }
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "hub" {
   transit_gateway_id = aws_ec2_transit_gateway.hub_tgw.id
-  vpc_id              = aws_vpc.hub.id
-  subnet_ids          = [aws_subnet.hub_mgmt.id]
-  tags                = { Name = "TGW-Attach-Hub" }
+  vpc_id             = aws_vpc.hub.id
+  subnet_ids         = [aws_subnet.hub_mgmt.id]
+  tags               = { Name = "TGW-Attach-Hub" }
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "spoke_web" {
   transit_gateway_id = aws_ec2_transit_gateway.hub_tgw.id
-  vpc_id              = aws_vpc.spoke_web.id
-  subnet_ids          = [aws_subnet.web_private_a.id, aws_subnet.web_private_b.id]
-  tags                = { Name = "TGW-Attach-Spoke-Web" }
+  vpc_id             = aws_vpc.spoke_web.id
+  subnet_ids         = [aws_subnet.web_private_a.id, aws_subnet.web_private_b.id]
+  tags               = { Name = "TGW-Attach-Spoke-Web" }
 }
 
 resource "aws_ec2_transit_gateway_vpc_attachment" "spoke_data" {
   transit_gateway_id = aws_ec2_transit_gateway.hub_tgw.id
-  vpc_id              = aws_vpc.spoke_data.id
-  subnet_ids          = [aws_subnet.data_private_a.id, aws_subnet.data_private_b.id]
-  tags                = { Name = "TGW-Attach-Spoke-Data" }
+  vpc_id             = aws_vpc.spoke_data.id
+  subnet_ids         = [aws_subnet.data_private_a.id, aws_subnet.data_private_b.id]
+  tags               = { Name = "TGW-Attach-Spoke-Data" }
 }
 
 # Default-route (internet) op de TGW zelf: al het niet-specifieke verkeer vanaf de

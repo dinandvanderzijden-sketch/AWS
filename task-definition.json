@@ -19,7 +19,7 @@
         { "name": "DB_USERNAME", "valueFrom": "prod/mariadb/credentials:username::" }
       ],
       "environment": [
-        { "name": "DB_HOST", "value": "terraform-2026092507564485620000000c.cbc6kyug8ovy.eu-west-1.rds.amazonaws.com" },
+        { "name": "DB_HOST", "value": "SET_BY_PIPELINE_FROM_TERRAFORM_OUTPUT" },
         { "name": "DB_NAME", "value": "appdb" }
       ],
       "logConfiguration": {

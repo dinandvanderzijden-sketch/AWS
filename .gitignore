@@ -1,1 +1,26 @@
+# Terraform
 .terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+tfplan
+*.tfplan
+plan.txt
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Variabelen die secrets kunnen bevatten (gebruik terraform.tfvars of
+# TF_VAR_* environment variables en commit die niet)
+*.tfvars
+!terraform.tfvars.example
+
+# Geverifieerde/niet-geverifieerde providers als je ze lokaal wil houden
+.terraformrc
+terraform.rc
+
+# Applicatie
+*.log
