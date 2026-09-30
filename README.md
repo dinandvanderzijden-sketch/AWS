@@ -134,10 +134,16 @@ terug te draaien. Wil je hem eerst laten staan, zet `oidc.tf` dan terug uit
 
 Vervolgens in GitHub: **Settings -> Secrets and variables -> Actions**:
 
-| Secret | Waarde |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | uit `create-access-key` |
-| `AWS_SECRET_ACCESS_KEY` | uit `create-access-key` |
+| Secret | Waarde | Wanneer |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | uit `create-access-key` | altijd |
+| `AWS_SECRET_ACCESS_KEY` | uit `create-access-key` | altijd |
+| `AWS_SESSION_TOKEN` | leeg laten bij een langdurige sleutel | alleen bij een tijdelijke `ASIA...`-sleutel |
+
+Let op de derde regel: de workflow stuurt sinds `9f92d7f` een
+`aws-session-token` mee. Een tijdelijke STS-sleutel (`ASIA...`) is zonder
+session token onbruikbaar, omdat AWS dan elke ondertekening als ongeldig
+afkeurt. Heb je een langdurige sleutel (`AKIA...`), laat deze secret dan leeg.
 
 Elke job controleert met `aws sts get-caller-identity` of hij werkelijk als
 deze user binnenkomt, en faalt hard als dat niet zo is.

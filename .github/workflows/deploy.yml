@@ -89,6 +89,20 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Diagnose van de AWS-secrets
+        env:
+          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          set -euo pipefail
+          key_schoon="$(printf '%s' "$KEY" | tr -d '[:space:]')"
+          secret_schoon="$(printf '%s' "$SECRET" | tr -d '[:space:]')"
+          echo "sleutel     : voorvoegsel=${KEY:0:4} lengte=${#KEY} witruimte=$([ "$KEY" = "$key_schoon" ] && echo nee || echo JA)"
+          echo "secret      : lengte=${#SECRET} witruimte=$([ "$SECRET" = "$secret_schoon" ] && echo nee || echo JA)"
+          echo "sessietoken : $([ -n "$TOKEN" ] && echo aan || echo leeg)"
+          echo "verwacht    : AKIA + lengte 20 voor de sleutel, 40 voor de secret"
+
       # De AWS-sleutels komen uit GitHub Secrets. Zie README.md voor de
       # IAM-user die je daarvoor aanmaakt, en voor rotatie.
       - name: Configure AWS credentials
@@ -96,6 +110,11 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Sinds 9f92d7f. Een tijdelijke STS-sleutel (ASIA...) is zonder
+          # session token onbruikbaar: AWS keurt elke ondertekening af als
+          # ongeldig. Voor een langdurige sleutel (AKIA...) is de regel
+          # onschadelijk; dan is de secret gewoon leeg.
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: eu-west-1
 
       # Zelfcontrole. Zou er ooit een access key van een persoon of uit een
@@ -153,11 +172,30 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Diagnose van de AWS-secrets
+        env:
+          KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          set -euo pipefail
+          key_schoon="$(printf '%s' "$KEY" | tr -d '[:space:]')"
+          secret_schoon="$(printf '%s' "$SECRET" | tr -d '[:space:]')"
+          echo "sleutel     : voorvoegsel=${KEY:0:4} lengte=${#KEY} witruimte=$([ "$KEY" = "$key_schoon" ] && echo nee || echo JA)"
+          echo "secret      : lengte=${#SECRET} witruimte=$([ "$SECRET" = "$secret_schoon" ] && echo nee || echo JA)"
+          echo "sessietoken : $([ -n "$TOKEN" ] && echo aan || echo leeg)"
+          echo "verwacht    : AKIA + lengte 20 voor de sleutel, 40 voor de secret"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Sinds 9f92d7f. Een tijdelijke STS-sleutel (ASIA...) is zonder
+          # session token onbruikbaar: AWS keurt elke ondertekening af als
+          # ongeldig. Voor een langdurige sleutel (AKIA...) is de regel
+          # onschadelijk; dan is de secret gewoon leeg.
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: eu-west-1
 
       - name: Controleer dat we als de CI-gebruiker binnenkomen
