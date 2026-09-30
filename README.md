@@ -117,6 +117,21 @@ eigen policy voor het IAM-beheer van de vier rollen in deze stack
 state-bucket `tfstate-eu-west-1-491799435972`. De exacte policies stonden
 eerder in `oidc.tf` en zijn terug te vinden in de git-historie.
 
+Staat er in je account nog een OIDC-provider uit de vorige opzet, dan moet je
+die eerst vrijgeven voordat Terraform hem mag verwijderen. AWS weigert een
+provider te verwijderen zolang er nog een client op `sts` `actions-to-access`
+toestaat:
+
+```bash
+aws iam update-open-id-connect-provider-client \
+  --open-id-connect-provider-arn <arn> --client-id sts \
+  --no-enable-actions-to-access-oidc
+```
+
+Het verwijderen van de provider is een `terraform apply` en dus niet meer
+terug te draaien. Wil je hem eerst laten staan, zet `oidc.tf` dan terug uit
+`git show 93a1ae3:oidc.tf`.
+
 Vervolgens in GitHub: **Settings -> Secrets and variables -> Actions**:
 
 | Secret | Waarde |
